@@ -1,0 +1,27 @@
+[package]
+name = "ruminative"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+vulkano = "0.33.*"
+vulkano-win = "0.33.*"
+vulkano-shaders = "0.33.*"
+winit = "0.28.*"
+
+[profile.release]
+strip = true
+
+[profile.dev]
+#strip = true
+opt-level = 1
+overflow-checks = false
+incremental = true
+
+[profile.dev.package."*"]
+#strip = true
+opt-level = 3
+overflow-checks = false
+incremental = true
