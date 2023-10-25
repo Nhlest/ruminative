@@ -3,11 +3,13 @@ use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 
 use crate::RenderingContext;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassContents};
+use imgui::*;
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, RenderingAttachmentInfo, RenderingInfo};
 use vulkano::image::view::ImageView;
 use vulkano::image::{ImageAccess, SwapchainImage};
 use vulkano::pipeline::graphics::viewport::Viewport;
-use vulkano::render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass};
+use vulkano::pipeline::{Pipeline, PipelineBindPoint};
+use vulkano::render_pass::{LoadOp, StoreOp};
 use vulkano::swapchain::{
   acquire_next_image, AcquireError, SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo,
 };
@@ -19,36 +21,34 @@ use winit::window::Window;
 
 fn window_size_dependent_setup(
   images: &[Arc<SwapchainImage>],
-  render_pass: Arc<RenderPass>,
   viewport: &mut Viewport,
-) -> Vec<Arc<Framebuffer>> {
+) -> Vec<Arc<ImageView<SwapchainImage>>> {
   let dimensions = images[0].dimensions().width_height();
   viewport.dimensions = [dimensions[0] as f32, dimensions[1] as f32];
 
   images
     .iter()
-    .map(|image| {
-      let view = ImageView::new_default(image.clone()).unwrap();
-      Framebuffer::new(
-        render_pass.clone(),
-        FramebufferCreateInfo {
-          attachments: vec![view],
-          ..Default::default()
-        },
-      )
-      .unwrap()
-    })
+    .map(|image| ImageView::new_default(image.clone()).unwrap())
     .collect::<Vec<_>>()
 }
 
 pub fn run(mut ctx: RenderingContext) -> Result<(), Box<dyn Error>> {
-  let mut framebuffers = window_size_dependent_setup(&ctx.images, ctx.render_pass.clone(), &mut ctx.viewport);
+  // let mut imgui = Context::create();
+  // imgui.fonts().add_font(&[FontSource::DefaultFontData {config: None}]);
+  // let tex = imgui.fonts().build_rgba32_texture();
+  // imgui.io_mut().display_size = [1024.0, 768.0];
+  // {
+  //   let a = imgui.new_frame();
+  //   a.show_demo_window(&mut true);
+  //   a.end_frame_early();
+  // }
+  // let d = imgui.render();
+  // dbg!(&d.total_vtx_count);
+  let mut images = window_size_dependent_setup(&ctx.images, &mut ctx.viewport);
 
   let command_buffer_allocator = StandardCommandBufferAllocator::new(ctx.device.clone(), Default::default());
 
   let mut recreate_swapchain = false;
-
-  let mut previous_frame_end = Some(sync::now(ctx.device.clone()).boxed());
 
   ctx.event_loop.run(move |event, _, control_flow| match event {
     Event::WindowEvent {
@@ -71,7 +71,7 @@ pub fn run(mut ctx: RenderingContext) -> Result<(), Box<dyn Error>> {
         return;
       }
 
-      previous_frame_end.as_mut().unwrap().cleanup_finished();
+      ctx.previous_frame_end.as_mut().unwrap().cleanup_finished();
 
       if recreate_swapchain {
         let (new_swapchain, new_images) = match ctx.swapchain.recreate(SwapchainCreateInfo {
@@ -85,7 +85,7 @@ pub fn run(mut ctx: RenderingContext) -> Result<(), Box<dyn Error>> {
 
         ctx.swapchain = new_swapchain;
 
-        framebuffers = window_size_dependent_setup(&new_images, ctx.render_pass.clone(), &mut ctx.viewport);
+        images = window_size_dependent_setup(&new_images, &mut ctx.viewport);
 
         recreate_swapchain = false;
       }
@@ -111,31 +111,34 @@ pub fn run(mut ctx: RenderingContext) -> Result<(), Box<dyn Error>> {
       .unwrap();
 
       builder
-        .begin_render_pass(
-          RenderPassBeginInfo {
-            clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
-
-            ..RenderPassBeginInfo::framebuffer(framebuffers[image_index as usize].clone())
-          },
-          SubpassContents::Inline,
-        )
+        .begin_rendering(RenderingInfo {
+          color_attachments: vec![Some(RenderingAttachmentInfo {
+            load_op: LoadOp::Clear,
+            store_op: StoreOp::Store,
+            clear_value: Some([0.0, 0.0, 0.1, 1.0].into()),
+            ..RenderingAttachmentInfo::image_view(images[image_index as usize].clone())
+          })],
+          ..Default::default()
+        })
         .unwrap()
         .set_viewport(0, [ctx.viewport.clone()])
         .bind_pipeline_graphics(ctx.pipeline.clone())
-        // .bind_descriptor_sets(
-        //   PipelineBindPoint::Graphics,
-        //   ctx.pipeline.layout().clone(),
-        //   0,
-        //   ctx.descriptor_set.clone(),
-        // )
-        // .draw(4, 1, 0, 0)
-        // .unwrap()
-        .end_render_pass()
+        .bind_descriptor_sets(
+          PipelineBindPoint::Graphics,
+          ctx.pipeline.layout().clone(),
+          0,
+          ctx.descriptor_set.clone(),
+        )
+        .bind_vertex_buffers(0, ctx.vertex_buffer.clone())
+        .draw(4, ctx.vertex_buffer.len() as u32, 0, 0)
+        .unwrap()
+        .end_rendering()
         .unwrap();
 
       let command_buffer = builder.build().unwrap();
 
-      let future = previous_frame_end
+      let future = ctx
+        .previous_frame_end
         .take()
         .unwrap()
         .join(acquire_future)
@@ -149,11 +152,11 @@ pub fn run(mut ctx: RenderingContext) -> Result<(), Box<dyn Error>> {
 
       match future {
         Ok(future) => {
-          previous_frame_end = Some(future.boxed());
+          ctx.previous_frame_end = Some(future.boxed());
         }
         Err(FlushError::OutOfDate) => {
           recreate_swapchain = true;
-          previous_frame_end = Some(sync::now(ctx.device.clone()).boxed());
+          ctx.previous_frame_end = Some(sync::now(ctx.device.clone()).boxed());
         }
         Err(e) => {
           panic!("failed to flush future: {e}");

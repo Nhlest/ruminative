@@ -6,10 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+imgui = "0.11.*"
 vulkano = "0.33.*"
 vulkano-win = "0.33.*"
 vulkano-shaders = "0.33.*"
 winit = "0.28.*"
+png = "0.17.*"
+texpresso = "2.0.*"
 
 [profile.release]
 strip = true
