@@ -7,7 +7,6 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, Rend
 use vulkano::image::view::ImageView;
 use vulkano::image::{ImageAccess, SwapchainImage};
 use vulkano::pipeline::graphics::viewport::Viewport;
-use vulkano::pipeline::{Pipeline, PipelineBindPoint};
 use vulkano::render_pass::{LoadOp, StoreOp};
 use vulkano::swapchain::{
   acquire_next_image, AcquireError, SwapchainCreateInfo, SwapchainCreationError, SwapchainPresentInfo,
@@ -17,7 +16,7 @@ use vulkano::sync::{FlushError, GpuFuture};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::ControlFlow;
 use winit::window::Window;
-use crate::engine::{MVertex, ZaWarudo, ZaWarudoPipeline};
+use crate::engine::{Ruminative};
 
 fn window_size_dependent_setup(
   images: &[Arc<SwapchainImage>],
@@ -32,7 +31,7 @@ fn window_size_dependent_setup(
     .collect::<Vec<_>>()
 }
 
-pub fn run(mut ctx: ZaWarudo) -> Result<(), Box<dyn Error>> {
+pub fn run(mut ctx: Ruminative) -> Result<(), Box<dyn Error>> {
   // let mut imgui = Context::create();
   // imgui.fonts().add_font(&[FontSource::DefaultFontData {config: None}]);
   // let tex = imgui.fonts().build_rgba32_texture();
@@ -89,78 +88,65 @@ pub fn run(mut ctx: ZaWarudo) -> Result<(), Box<dyn Error>> {
         recreate_swapchain = false;
       }
 
-      for ZaWarudoPipeline { pipeline, descriptor_sets, vertex_buffer } in &ctx.pipelines {
-        let (image_index, suboptimal, acquire_future) = match acquire_next_image(ctx.internals.swapchain.clone(), None) {
-          Ok(r) => r,
-          Err(AcquireError::OutOfDate) => {
-            recreate_swapchain = true;
-            return;
-          }
-          Err(e) => panic!("failed to acquire next image: {e}"),
-        };
-
-        if suboptimal {
+      let (image_index, suboptimal, acquire_future) = match acquire_next_image(ctx.internals.swapchain.clone(), None) {
+        Ok(r) => r,
+        Err(AcquireError::OutOfDate) => {
           recreate_swapchain = true;
+          return;
         }
+        Err(e) => panic!("failed to acquire next image: {e}"),
+      };
 
-        let mut builder = AutoCommandBufferBuilder::primary(
-          &command_buffer_allocator,
-          ctx.internals.queue.queue_family_index(),
-          CommandBufferUsage::OneTimeSubmit,
+      if suboptimal {
+        recreate_swapchain = true;
+      }
+      let mut builder = AutoCommandBufferBuilder::primary(
+        &command_buffer_allocator,
+        ctx.internals.queue.queue_family_index(),
+        CommandBufferUsage::OneTimeSubmit,
+      ).unwrap();
+      builder
+        .begin_rendering(RenderingInfo {
+          color_attachments: vec![Some(RenderingAttachmentInfo {
+            load_op: LoadOp::Clear,
+            store_op: StoreOp::Store,
+            clear_value: Some([0.0, 0.0, 0.1, 1.0].into()),
+            ..RenderingAttachmentInfo::image_view(images[image_index as usize].clone())
+          })],
+          ..Default::default()
+        })
+        .unwrap()
+        .set_viewport(0, [ctx.viewport.clone()]);
+
+      ctx.pipelines.iter().for_each(|pipeline| { pipeline.bind(&mut builder); });
+
+      builder.end_rendering().unwrap();
+
+      let command_buffer = builder.build().unwrap();
+
+      let future = ctx
+        .previous_frame_end
+        .take()
+        .unwrap()
+        .join(acquire_future)
+        .then_execute(ctx.internals.queue.clone(), command_buffer)
+        .unwrap()
+        .then_swapchain_present(
+          ctx.internals.queue.clone(),
+          SwapchainPresentInfo::swapchain_image_index(ctx.internals.swapchain.clone(), image_index),
         )
-          .unwrap();
+        .then_signal_fence_and_flush();
 
-        builder
-          .begin_rendering(RenderingInfo {
-            color_attachments: vec![Some(RenderingAttachmentInfo {
-              load_op: LoadOp::Clear,
-              store_op: StoreOp::Store,
-              clear_value: Some([0.0, 0.0, 0.1, 1.0].into()),
-              ..RenderingAttachmentInfo::image_view(images[image_index as usize].clone())
-            })],
-            ..Default::default()
-          })
-          .unwrap()
-          .set_viewport(0, [ctx.viewport.clone()])
-          .bind_pipeline_graphics(pipeline.clone())
-          .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            pipeline.layout().clone(),
-            0,
-            descriptor_sets[0].clone(),
-          )
-          .bind_vertex_buffers(0, vertex_buffer.clone())
-          .draw(4, vertex_buffer.len() as u32, 0, 0)
-          .unwrap()
-          .end_rendering()
-          .unwrap();
-
-        let command_buffer = builder.build().unwrap();
-
-        let future = ctx
-          .previous_frame_end
-          .take()
-          .unwrap()
-          .join(acquire_future)
-          .then_execute(ctx.internals.queue.clone(), command_buffer)
-          .unwrap()
-          .then_swapchain_present(
-            ctx.internals.queue.clone(),
-            SwapchainPresentInfo::swapchain_image_index(ctx.internals.swapchain.clone(), image_index),
-          )
-          .then_signal_fence_and_flush();
-
-        match future {
-          Ok(future) => {
-            ctx.previous_frame_end = Some(future.boxed());
-          }
-          Err(FlushError::OutOfDate) => {
-            recreate_swapchain = true;
-            ctx.previous_frame_end = Some(sync::now(ctx.internals.device.clone()).boxed());
-          }
-          Err(e) => {
-            panic!("failed to flush future: {e}");
-          }
+      match future {
+        Ok(future) => {
+          ctx.previous_frame_end = Some(future.boxed());
+        }
+        Err(FlushError::OutOfDate) => {
+          recreate_swapchain = true;
+          ctx.previous_frame_end = Some(sync::now(ctx.internals.device.clone()).boxed());
+        }
+        Err(e) => {
+          panic!("failed to flush future: {e}");
         }
       }
     }
