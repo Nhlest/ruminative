@@ -163,29 +163,37 @@ fn to_imgui_key(keycode: VirtualKeyCode) -> Option<Key> {
   }
 }
 
+fn handle_key_modifier(io: &mut Io, key: VirtualKeyCode, down: bool) {
+  if key == VirtualKeyCode::LShift || key == VirtualKeyCode::RShift {
+    io.add_key_event(imgui::Key::ModShift, down);
+  } else if key == VirtualKeyCode::LControl || key == VirtualKeyCode::RControl {
+    io.add_key_event(imgui::Key::ModCtrl, down);
+  } else if key == VirtualKeyCode::LAlt || key == VirtualKeyCode::RAlt {
+    io.add_key_event(imgui::Key::ModAlt, down);
+  } else if key == VirtualKeyCode::LWin || key == VirtualKeyCode::RWin {
+    io.add_key_event(imgui::Key::ModSuper, down);
+  }
+}
+
 fn handle_window_event(io: &mut Io, window: &Window, event: &WindowEvent) {
   match *event {
     WindowEvent::Resized(physical_size) => {
       let logical_size = physical_size.to_logical(window.scale_factor());
-      // let logical_size = self.scale_size_from_winit(window, logical_size);
       io.display_size = [logical_size.width, logical_size.height];
     }
     WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
       let hidpi_factor = scale_factor;
-      // Mouse position needs to be changed while we still have both the old and the new
-      // values
       if io.mouse_pos[0].is_finite() && io.mouse_pos[1].is_finite() {
-        io.mouse_pos = [io.mouse_pos[0] * (2.0) as f32, io.mouse_pos[1] * (2.0) as f32];
+        io.mouse_pos = [
+          io.mouse_pos[0] * window.scale_factor() as f32,
+          io.mouse_pos[1] * window.scale_factor() as f32,
+        ];
       }
       io.display_framebuffer_scale = [hidpi_factor as f32, hidpi_factor as f32];
-      // Window size might change too if we are using DPI rounding
       let logical_size = window.inner_size().to_logical(scale_factor);
       io.display_size = [logical_size.width, logical_size.height];
     }
     WindowEvent::ModifiersChanged(modifiers) => {
-      // We need to track modifiers separately because some system like macOS, will
-      // not reliably send modifier states during certain events like ScreenCapture.
-      // Gotta let the people show off their pretty imgui widgets!
       io.add_key_event(Key::ModShift, modifiers.shift());
       io.add_key_event(Key::ModCtrl, modifiers.ctrl());
       io.add_key_event(Key::ModAlt, modifiers.alt());
@@ -201,15 +209,7 @@ fn handle_window_event(io: &mut Io, window: &Window, event: &WindowEvent) {
     } => {
       let pressed = state == ElementState::Pressed;
 
-      // We map both left and right ctrl to `ModCtrl`, etc.
-      // imgui is told both "left control is pressed" and
-      // "consider the control key is pressed". Allows
-      // applications to use either general "ctrl" or a
-      // specific key. Same applies to other modifiers.
-      // https://github.com/ocornut/imgui/issues/5047
-
-      // 222
-      // handle_key_modifier(io, key, pressed);
+      handle_key_modifier(io, key, pressed);
 
       // Add main key event
       if let Some(key) = to_imgui_key(key) {
@@ -217,8 +217,6 @@ fn handle_window_event(io: &mut Io, window: &Window, event: &WindowEvent) {
       }
     }
     WindowEvent::ReceivedCharacter(ch) => {
-      // Exclude the backspace key ('\u{7f}'). Otherwise we will insert this char and then
-      // delete it.
       if ch != '\u{7f}' {
         io.add_input_character(ch)
       }
@@ -235,7 +233,7 @@ fn handle_window_event(io: &mut Io, window: &Window, event: &WindowEvent) {
       let (h, v) = match delta {
         MouseScrollDelta::LineDelta(h, v) => (h, v),
         MouseScrollDelta::PixelDelta(pos) => {
-          let pos = pos.to_logical::<f64>(2.0);
+          let pos = pos.to_logical::<f64>(window.scale_factor());
           let h = match pos.x.partial_cmp(&0.0) {
             Some(Ordering::Greater) => 1.0,
             Some(Ordering::Less) => -1.0,
@@ -280,7 +278,6 @@ impl RuminativePipeline for ImguiPipeline {
     let d = self.imgui.render();
     let mut i = 0;
     for dl in d.draw_lists() {
-      // let vertices : &[DrawVertPod] = unsafe { std::mem::transmute(dl.vtx_buffer()) };
       assert_eq!(core::mem::size_of::<DrawVertPod>(), core::mem::size_of::<DrawVert>(),);
       assert!(core::mem::align_of::<DrawVertPod>() <= core::mem::align_of::<DrawVert>());
       let vertices: &[DrawVertPod] =
@@ -355,12 +352,12 @@ impl RuminativePipeline for ImguiPipeline {
           0,
           [Scissor {
             origin: [
-              f32::max(0.0, clip_rect[0]) as u32 * 2,
-              f32::max(0.0, clip_rect[1]) as u32 * 2,
+              (f32::max(0.0, clip_rect[0]) * window.scale_factor() as f32) as u32,
+              (f32::max(0.0, clip_rect[1]) * window.scale_factor() as f32) as u32,
             ],
             dimensions: [
-              (clip_rect[2] - clip_rect[0]).abs().ceil() as u32 * 2,
-              (clip_rect[3] - clip_rect[1]).abs().ceil() as u32 * 2,
+              ((clip_rect[2] - clip_rect[0]).abs().ceil() * window.scale_factor() as f32) as u32,
+              ((clip_rect[3] - clip_rect[1]).abs().ceil() * window.scale_factor() as f32) as u32,
             ],
           }],
         )
@@ -368,8 +365,8 @@ impl RuminativePipeline for ImguiPipeline {
           self.pipeline.layout().clone(),
           0,
           vs::PushConstants {
-            window_height: window.inner_size().to_logical(2.0).height,
-            window_width: window.inner_size().to_logical(2.0).width,
+            window_height: window.inner_size().to_logical(window.scale_factor()).height,
+            window_width: window.inner_size().to_logical(window.scale_factor()).width,
           },
         )
         .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)
@@ -382,8 +379,6 @@ impl RuminativePipeline for ImguiPipeline {
       Event::WindowEvent { window_id, ref event } if window_id == window.id() => {
         handle_window_event(self.imgui.io_mut(), window, event);
       }
-      // Track key release events outside our window. If we don't do this,
-      // we might never see the release event if some other window gets focus.
       Event::DeviceEvent {
         event:
           DeviceEvent::Key(KeyboardInput {
