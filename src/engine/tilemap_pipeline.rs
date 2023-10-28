@@ -1,9 +1,12 @@
+use crate::engine::{RuminativeInternals, RuminativePipeline};
 use std::error::Error;
 use std::io::Cursor;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract};
+use vulkano::command_buffer::{
+  AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
+};
 use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
@@ -14,14 +17,14 @@ use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemo
 use vulkano::pipeline::graphics::color_blend::ColorBlendState;
 use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
 use vulkano::pipeline::graphics::render_pass::PipelineRenderingCreateInfo;
-use vulkano::pipeline::graphics::vertex_input::{Vertex};
-use vulkano::pipeline::graphics::viewport::{ViewportState};
+use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::pipeline::graphics::viewport::ViewportState;
 use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
 use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
 use vulkano::shader::ShaderModule;
-use vulkano::swapchain::{Swapchain};
+use vulkano::swapchain::Swapchain;
 use vulkano::sync::GpuFuture;
-use crate::engine::{RuminativeInternals, RuminativePipeline};
+use winit::window::Window;
 
 pub struct TilemapPipeline {
   pub pipeline: Arc<GraphicsPipeline>,
@@ -30,7 +33,11 @@ pub struct TilemapPipeline {
 }
 
 impl RuminativePipeline for TilemapPipeline {
-  fn bind<'a>(&self, builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>) -> &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer> {
+  fn bind<'a>(
+    &self,
+    builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    _window: &Window,
+  ) -> &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer> {
     builder
       .bind_pipeline_graphics(self.pipeline.clone())
       .bind_descriptor_sets(
@@ -71,7 +78,7 @@ mod fs {
 impl TilemapPipeline {
   fn shaders(device: Arc<Device>) -> Result<(Arc<ShaderModule>, Arc<ShaderModule>), Box<dyn Error>> {
     let vs = vs::load(device.clone())?;
-    let fs = fs::load(device.clone())?;
+    let fs = fs::load(device)?;
     Ok((vs, fs))
   }
 
@@ -102,7 +109,7 @@ impl TilemapPipeline {
       },
       vertices,
     )
-      .unwrap();
+    .unwrap();
     Ok(vertex_buffer)
   }
 
@@ -119,7 +126,7 @@ impl TilemapPipeline {
       queue.queue_family_index(),
       CommandBufferUsage::OneTimeSubmit,
     )
-      .unwrap();
+    .unwrap();
 
     let texture = {
       let png_bytes = include_bytes!("../../assets/tiles.png").to_vec();
@@ -144,12 +151,12 @@ impl TilemapPipeline {
         Format::R8G8B8A8_SRGB,
         &mut uploads,
       )
-        .unwrap();
+      .unwrap();
       ImageView::new_default(image).unwrap()
     };
 
     let sampler = Sampler::new(
-      device.clone(),
+      device,
       SamplerCreateInfo {
         mag_filter: Filter::Nearest,
         min_filter: Filter::Nearest,
@@ -157,7 +164,7 @@ impl TilemapPipeline {
         ..Default::default()
       },
     )
-      .unwrap();
+    .unwrap();
 
     let layout = pipeline.layout().set_layouts().get(0).unwrap();
     let set = PersistentDescriptorSet::new(
@@ -165,9 +172,9 @@ impl TilemapPipeline {
       layout.clone(),
       [WriteDescriptorSet::image_view_sampler(0, texture, sampler)],
     )
-      .unwrap();
+    .unwrap();
 
-    let previous_frame_end = Some(uploads.build().unwrap().execute(queue.clone()).unwrap().boxed());
+    let previous_frame_end = Some(uploads.build().unwrap().execute(queue).unwrap().boxed());
 
     Ok((set, previous_frame_end))
   }
@@ -198,22 +205,42 @@ impl TilemapPipeline {
       )
       .viewport_state(ViewportState::viewport_dynamic_scissor_irrelevant())
       .color_blend_state(ColorBlendState::default().blend_alpha())
-      .build(device.clone())?;
+      .build(device)?;
     Ok(pipeline)
   }
 
-  pub fn new(ruminative_internals: &RuminativeInternals) -> Result<(Self, Box<dyn GpuFuture>), Box<dyn Error>> {
+  pub fn new(
+    ruminative_internals: &RuminativeInternals,
+    future: Option<Box<dyn GpuFuture>>,
+  ) -> Result<(Self, Box<dyn GpuFuture>), Box<dyn Error>> {
     let memory_allocator = StandardMemoryAllocator::new_default(ruminative_internals.device.clone());
     let (vs, fs) = Self::shaders(ruminative_internals.device.clone())?;
-    let pipeline = Self::pipeline(ruminative_internals.device.clone(), ruminative_internals.swapchain.clone(), vs.clone(), fs.clone())?;
-    let (descriptor_set, previous_frame_end) =
-      Self::sampler(ruminative_internals.device.clone(), ruminative_internals.queue.clone(), pipeline.clone(), &memory_allocator)?;
+    let pipeline = Self::pipeline(
+      ruminative_internals.device.clone(),
+      ruminative_internals.swapchain.clone(),
+      vs.clone(),
+      fs.clone(),
+    )?;
+    let (descriptor_set, previous_frame_end) = Self::sampler(
+      ruminative_internals.device.clone(),
+      ruminative_internals.queue.clone(),
+      pipeline.clone(),
+      &memory_allocator,
+    )?;
     let vertex_buffer = Self::vertex_buffer(&memory_allocator)?;
+    let previous_frame_end = if let Some(future) = future {
+      future.join(previous_frame_end.unwrap()).boxed()
+    } else {
+      previous_frame_end.unwrap()
+    };
 
-    Ok((Self {
-      pipeline,
-      descriptor_set,
-      vertex_buffer,
-    }, previous_frame_end.unwrap()))
+    Ok((
+      Self {
+        pipeline,
+        descriptor_set,
+        vertex_buffer,
+      },
+      previous_frame_end,
+    ))
   }
 }

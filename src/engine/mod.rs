@@ -1,3 +1,5 @@
+use crate::engine::imgui_pipeline::ImguiPipeline;
+use crate::engine::tilemap_pipeline::TilemapPipeline;
 use std::error::Error;
 use std::sync::Arc;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, PrimaryAutoCommandBuffer};
@@ -5,19 +7,21 @@ use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::image::{ImageUsage, SwapchainImage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
-use vulkano::pipeline::graphics::viewport::{Viewport};
+use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::swapchain::{PresentMode, Surface, Swapchain, SwapchainCreateInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::VulkanLibrary;
 use vulkano_win::{required_extensions, VkSurfaceBuild};
+use winit::event::Event;
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
-use crate::engine::tilemap_pipeline::TilemapPipeline;
 
+pub mod imgui_pipeline;
 pub mod tilemap_pipeline;
 
 pub struct RuminativeInternals {
-  pub event_loop: EventLoop<()>,
+  pub memory_allocator: StandardMemoryAllocator,
   pub device: Arc<Device>,
   pub queue: Arc<Queue>,
   pub surface: Arc<Surface>,
@@ -118,7 +122,7 @@ impl RuminativeInternals {
         image_format,
         image_extent: window.inner_size().into(),
         image_usage: ImageUsage::COLOR_ATTACHMENT,
-        present_mode: PresentMode::Mailbox,
+        present_mode: PresentMode::Fifo,
         composite_alpha: surface_capabilities
           .supported_composite_alpha
           .into_iter()
@@ -128,14 +132,14 @@ impl RuminativeInternals {
       },
     )?)
   }
-  pub fn new() -> Result<Self, Box<dyn Error>> {
-    let event_loop = EventLoop::new();
+  pub fn new(event_loop: &EventLoop<()>) -> Result<Self, Box<dyn Error>> {
     let instance = Self::instance()?;
     let (device, surface, queue) = Self::device_surface_and_queue(&event_loop, instance.clone())?;
+    let memory_allocator = StandardMemoryAllocator::new_default(device.clone());
     let (swapchain, images) = Self::swapchain_and_images(device.clone(), surface.clone())?;
 
     Ok(Self {
-      event_loop,
+      memory_allocator,
       device,
       images,
       surface,
@@ -146,10 +150,17 @@ impl RuminativeInternals {
 }
 
 pub trait RuminativePipeline {
-  fn bind<'a>(&self, builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>) -> &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
+  fn handle_event(&mut self, _window: &Window, _event: &Event<()>) {}
+  fn update(&mut self, _ruminative_internals: &RuminativeInternals) {}
+  fn bind<'a>(
+    &self,
+    builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
+    window: &Window,
+  ) -> &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>;
 }
 
 pub struct Ruminative {
+  pub event_loop: EventLoop<()>,
   pub internals: RuminativeInternals,
   pub pipelines: Vec<Box<dyn RuminativePipeline>>,
   pub viewport: Viewport,
@@ -158,16 +169,19 @@ pub struct Ruminative {
 
 impl Ruminative {
   pub fn new() -> Result<Self, Box<dyn Error>> {
-    let internals = RuminativeInternals::new()?;
-    let (pipeline, previous_frame_end) = TilemapPipeline::new(&internals)?;
+    let event_loop = EventLoop::new();
+    let internals = RuminativeInternals::new(&event_loop)?;
+    let (pipeline, previous_frame_end) = TilemapPipeline::new(&internals, None)?;
+    let (pipeline2, previous_frame_end) = ImguiPipeline::new(&internals, Some(previous_frame_end))?;
     let viewport = Viewport {
       origin: [0.0, 0.0],
       dimensions: [0.0, 0.0],
       depth_range: 0.0..1.0,
     };
     Ok(Self {
+      event_loop,
       internals,
-      pipelines: vec![Box::new(pipeline)],
+      pipelines: vec![Box::new(pipeline), Box::new(pipeline2)],
       viewport,
       previous_frame_end: Some(previous_frame_end),
     })

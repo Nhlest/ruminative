@@ -1,6 +1,6 @@
+use crate::engine::Ruminative;
 use crate::graphics::runner::run;
 use std::error::Error;
-use crate::engine::Ruminative;
 
 mod engine;
 mod graphics;
