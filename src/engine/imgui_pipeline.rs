@@ -1,36 +1,47 @@
 use crate::engine::{RuminativeInternals, RuminativePipeline};
-use imgui::{BackendFlags, Context, DrawCmd, DrawIdx, DrawVert, FontAtlasTexture, FontSource, Io, Key};
+use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawIdx, DrawVert, FontAtlasTexture, FontSource, Io, Key};
+use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::error::Error;
+use std::ffi::CString;
 use std::slice;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
-  AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract,
+  AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer,
+  PrimaryCommandBufferAbstract,
 };
-use vulkano::descriptor_set::allocator::StandardDescriptorSetAllocator;
+use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
 use vulkano::format::Format;
+use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
 use vulkano::image::view::ImageView;
-use vulkano::image::{ImageDimensions, ImmutableImage, MipmapsCount};
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryUsage, StandardMemoryAllocator};
-use vulkano::pipeline::graphics::color_blend::ColorBlendState;
-use vulkano::pipeline::graphics::input_assembly::{InputAssemblyState, PrimitiveTopology};
-use vulkano::pipeline::graphics::render_pass::PipelineRenderingCreateInfo;
-use vulkano::pipeline::graphics::vertex_input::Vertex;
+use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
+use vulkano::pipeline::graphics::color_blend::{AttachmentBlend, ColorBlendAttachmentState, ColorBlendState};
+use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
+use vulkano::pipeline::graphics::multisample::MultisampleState;
+use vulkano::pipeline::graphics::rasterization::RasterizationState;
+use vulkano::pipeline::graphics::subpass::PipelineRenderingCreateInfo;
+use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
 use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
-use vulkano::pipeline::{GraphicsPipeline, Pipeline, PipelineBindPoint};
-use vulkano::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
-use vulkano::shader::ShaderModule;
+use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
+use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
+use vulkano::pipeline::{
+  DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
+};
+use vulkano::shader::EntryPoint;
 use vulkano::swapchain::Swapchain;
 use vulkano::sync::GpuFuture;
+use vulkano::DeviceSize;
 use winit::event::{
   DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, TouchPhase, VirtualKeyCode,
   WindowEvent,
 };
 use winit::window::Window;
+// use crate::engine::tilemap_pipeline::MVertex;
 
 pub struct ImguiPipeline {
   pub pipeline: Arc<GraphicsPipeline>,
@@ -272,8 +283,15 @@ impl RuminativePipeline for ImguiPipeline {
     self.vertex_buffers.clear();
     self.draw_commands.clear();
     {
-      let a = self.imgui.new_frame();
-      a.show_demo_window(&mut true);
+      let ui = self.imgui.new_frame();
+      ui.dockspace_over_main_viewport();
+      ui.show_demo_window(&mut true);
+      unsafe {
+        let dock_id = imgui_sys::igGetID_Str(CString::new("Dockspace").unwrap().as_ptr());
+        let _dock = imgui_sys::igDockBuilderGetNode(dock_id);
+      }
+      // imgui::Pan
+      // ui.window("Bottom panel").dock
     }
     let d = self.imgui.render();
     let mut i = 0;
@@ -283,13 +301,13 @@ impl RuminativePipeline for ImguiPipeline {
       let vertices: &[DrawVertPod] =
         unsafe { slice::from_raw_parts(dl.vtx_buffer().as_ptr().cast(), dl.vtx_buffer().len()) };
       let vertex_buffer = Buffer::from_iter(
-        &ruminative_internals.memory_allocator,
+        ruminative_internals.memory_allocator.clone(),
         BufferCreateInfo {
           usage: BufferUsage::VERTEX_BUFFER,
           ..Default::default()
         },
         AllocationCreateInfo {
-          usage: MemoryUsage::Upload,
+          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
           ..Default::default()
         },
         vertices.iter().cloned(),
@@ -299,13 +317,13 @@ impl RuminativePipeline for ImguiPipeline {
       self.vertex_buffers.push(vertex_buffer);
       let indicies = dl.idx_buffer();
       let index_buffer = Buffer::from_iter(
-        &ruminative_internals.memory_allocator,
+        ruminative_internals.memory_allocator.clone(),
         BufferCreateInfo {
           usage: BufferUsage::INDEX_BUFFER,
           ..Default::default()
         },
         AllocationCreateInfo {
-          usage: MemoryUsage::Upload,
+          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
           ..Default::default()
         },
         indicies.iter().copied(),
@@ -335,32 +353,32 @@ impl RuminativePipeline for ImguiPipeline {
     &self,
     builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
     window: &Window,
-  ) -> &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer> {
+  ) -> Result<&'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
     builder
-      .bind_pipeline_graphics(self.pipeline.clone())
+      .bind_pipeline_graphics(self.pipeline.clone())?
       .bind_descriptor_sets(
         PipelineBindPoint::Graphics,
         self.pipeline.layout().clone(),
         0,
         self.descriptor_set.clone(),
-      );
+      )?;
     for (buf, index_count, first_index, vertex_offset, clip_rect) in &self.draw_commands {
       builder
-        .bind_vertex_buffers(0, self.vertex_buffers[*buf].clone())
-        .bind_index_buffer(self.index_buffers[*buf].clone())
+        .bind_vertex_buffers(0, self.vertex_buffers[*buf].clone())?
+        .bind_index_buffer(self.index_buffers[*buf].clone())?
         .set_scissor(
           0,
-          [Scissor {
-            origin: [
+          smallvec![Scissor {
+            offset: [
               (f32::max(0.0, clip_rect[0]) * window.scale_factor() as f32) as u32,
               (f32::max(0.0, clip_rect[1]) * window.scale_factor() as f32) as u32,
             ],
-            dimensions: [
+            extent: [
               ((clip_rect[2] - clip_rect[0]).abs().ceil() * window.scale_factor() as f32) as u32,
               ((clip_rect[3] - clip_rect[1]).abs().ceil() * window.scale_factor() as f32) as u32,
             ],
           }],
-        )
+        )?
         .push_constants(
           self.pipeline.layout().clone(),
           0,
@@ -368,11 +386,10 @@ impl RuminativePipeline for ImguiPipeline {
             window_height: window.inner_size().to_logical(window.scale_factor()).height,
             window_width: window.inner_size().to_logical(window.scale_factor()).width,
           },
-        )
-        .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)
-        .unwrap();
+        )?
+        .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)?;
     }
-    builder
+    Ok(builder)
   }
   fn handle_event(&mut self, window: &Window, event: &Event<()>) {
     match *event {
@@ -423,9 +440,9 @@ mod fs {
 }
 
 impl ImguiPipeline {
-  fn shaders(device: Arc<Device>) -> Result<(Arc<ShaderModule>, Arc<ShaderModule>), Box<dyn Error>> {
-    let vs = vs::load(device.clone())?;
-    let fs = fs::load(device)?;
+  fn shaders(device: Arc<Device>) -> Result<(EntryPoint, EntryPoint), Box<dyn Error>> {
+    let vs = vs::load(device.clone())?.entry_point("main").unwrap();
+    let fs = fs::load(device)?.entry_point("main").unwrap();
     Ok((vs, fs))
   }
 
@@ -433,35 +450,51 @@ impl ImguiPipeline {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: Arc<GraphicsPipeline>,
-    memory_allocator: &StandardMemoryAllocator,
+    memory_allocator: Arc<StandardMemoryAllocator>,
     tex: FontAtlasTexture,
   ) -> Result<(Arc<PersistentDescriptorSet>, Option<Box<dyn GpuFuture>>), Box<dyn Error>> {
-    let descriptor_set_allocator = StandardDescriptorSetAllocator::new(device.clone());
+    let descriptor_set_allocator =
+      StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
     let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
     let mut uploads = AutoCommandBufferBuilder::primary(
       &command_buffer_allocator,
       queue.queue_family_index(),
       CommandBufferUsage::OneTimeSubmit,
-    )
-    .unwrap();
+    )?;
+
+    let upload_buffer = Buffer::new_slice(
+      memory_allocator.clone(),
+      BufferCreateInfo {
+        usage: BufferUsage::TRANSFER_SRC,
+        ..Default::default()
+      },
+      AllocationCreateInfo {
+        memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+        ..Default::default()
+      },
+      (tex.width * tex.height * 4) as DeviceSize,
+    )?;
+
+    upload_buffer.write()?.copy_from_slice(tex.data);
 
     let texture = {
-      let dimensions = ImageDimensions::Dim2d {
-        width: tex.width,
-        height: tex.height,
-        array_layers: 1,
-      };
-
-      let image = ImmutableImage::from_iter(
+      let image = Image::new(
         memory_allocator,
-        tex.data.iter().copied(),
-        dimensions,
-        MipmapsCount::One,
-        Format::R8G8B8A8_SRGB,
-        &mut uploads,
-      )
-      .unwrap();
-      ImageView::new_default(image).unwrap()
+        ImageCreateInfo {
+          usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
+          format: Format::R8G8B8A8_SRGB,
+          image_type: ImageType::Dim2d,
+          extent: [tex.width, tex.height, 1],
+          ..Default::default()
+        },
+        AllocationCreateInfo {
+          memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+          ..Default::default()
+        },
+      )?;
+
+      uploads.copy_buffer_to_image(CopyBufferToImageInfo::buffer_image(upload_buffer, image.clone()))?;
+      ImageView::new_default(image)?
     };
 
     let sampler = Sampler::new(
@@ -472,19 +505,18 @@ impl ImguiPipeline {
         address_mode: [SamplerAddressMode::Repeat; 3],
         ..Default::default()
       },
-    )
-    .unwrap();
+    )?;
 
     let layout = pipeline.layout().set_layouts().get(0).unwrap();
     let set = PersistentDescriptorSet::new(
       &descriptor_set_allocator,
       layout.clone(),
       [WriteDescriptorSet::image_view_sampler(0, texture, sampler)],
-    )
-    .unwrap();
+      [],
+    )?;
 
-    let previous_frame_end = Some(uploads.build().unwrap().execute(queue).unwrap().boxed());
-    previous_frame_end.unwrap().flush().unwrap();
+    let previous_frame_end = Some(uploads.build()?.execute(queue)?.boxed());
+    previous_frame_end.unwrap().flush()?;
 
     Ok((set, None))
   }
@@ -492,27 +524,44 @@ impl ImguiPipeline {
   fn pipeline(
     device: Arc<Device>,
     swapchain: Arc<Swapchain>,
-    vs: Arc<ShaderModule>,
-    fs: Arc<ShaderModule>,
+    vs: EntryPoint,
+    fs: EntryPoint,
   ) -> Result<Arc<GraphicsPipeline>, Box<dyn Error>> {
-    let pipeline = GraphicsPipeline::start()
-      .vertex_input_state(DrawVertPod::per_vertex())
-      .render_pass(PipelineRenderingCreateInfo {
-        color_attachment_formats: vec![Some(swapchain.image_format())],
-        ..Default::default()
-      })
-      .input_assembly_state(InputAssemblyState::new().topology(PrimitiveTopology::TriangleList))
-      .vertex_shader(
-        vs.entry_point("main").ok_or("No main entry point in vertex shader")?,
-        (),
-      )
-      .fragment_shader(
-        fs.entry_point("main").ok_or("No main entry point in fragment shader")?,
-        (),
-      )
-      .viewport_state(ViewportState::viewport_dynamic_scissor_dynamic(1))
-      .color_blend_state(ColorBlendState::default().blend_alpha())
-      .build(device)?;
+    let vertex_input_state = DrawVertPod::per_vertex().definition(&vs.info().input_interface)?;
+    let stages = smallvec![
+      PipelineShaderStageCreateInfo::new(vs),
+      PipelineShaderStageCreateInfo::new(fs),
+    ];
+    let layout = PipelineLayout::new(
+      device.clone(),
+      PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(device.clone())?,
+    )?;
+    let subpass = PipelineRenderingCreateInfo {
+      color_attachment_formats: vec![Some(swapchain.image_format())],
+      ..Default::default()
+    };
+    let pipeline = GraphicsPipeline::new(
+      device.clone(),
+      None,
+      GraphicsPipelineCreateInfo {
+        stages,
+        vertex_input_state: Some(vertex_input_state),
+        input_assembly_state: Some(InputAssemblyState::default()),
+        viewport_state: Some(ViewportState::default()),
+        rasterization_state: Some(RasterizationState::default()),
+        multisample_state: Some(MultisampleState::default()),
+        color_blend_state: Some(ColorBlendState::with_attachment_states(
+          subpass.color_attachment_formats.len() as u32,
+          ColorBlendAttachmentState {
+            blend: Some(AttachmentBlend::alpha()),
+            ..Default::default()
+          },
+        )),
+        dynamic_state: [DynamicState::Scissor, DynamicState::Viewport].into_iter().collect(),
+        subpass: Some(subpass.into()),
+        ..GraphicsPipelineCreateInfo::layout(layout)
+      },
+    )?;
     Ok(pipeline)
   }
 
@@ -520,13 +569,13 @@ impl ImguiPipeline {
     ruminative_internals: &RuminativeInternals,
     future: Option<Box<dyn GpuFuture>>,
   ) -> Result<(Self, Box<dyn GpuFuture>), Box<dyn Error>> {
-    let memory_allocator = &ruminative_internals.memory_allocator;
+    let memory_allocator = ruminative_internals.memory_allocator.clone();
     let (vs, fs) = Self::shaders(ruminative_internals.device.clone())?;
     let pipeline = Self::pipeline(
       ruminative_internals.device.clone(),
       ruminative_internals.swapchain.clone(),
-      vs.clone(),
-      fs.clone(),
+      vs,
+      fs,
     )?;
 
     let mut imgui = Context::create();
@@ -537,7 +586,7 @@ impl ImguiPipeline {
       ruminative_internals.device.clone(),
       ruminative_internals.queue.clone(),
       pipeline.clone(),
-      &memory_allocator,
+      memory_allocator,
       tex,
     )?;
     // let vertex_buffer = Self::vertex_buffer(&memory_allocator)?;
@@ -555,6 +604,7 @@ impl ImguiPipeline {
     io.backend_flags.insert(BackendFlags::HAS_MOUSE_CURSORS);
     io.backend_flags.insert(BackendFlags::HAS_SET_MOUSE_POS);
     io.backend_flags.insert(BackendFlags::RENDERER_HAS_VTX_OFFSET);
+    io.config_flags.insert(ConfigFlags::DOCKING_ENABLE);
     imgui.set_platform_name(Some(format!("imgui-winit-support {}", env!("CARGO_PKG_VERSION"))));
     imgui.set_renderer_name(Some(format!("imgui-glium-renderer {}", env!("CARGO_PKG_VERSION"))));
 
