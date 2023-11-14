@@ -5,8 +5,10 @@ use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::image::{Image, ImageUsage};
-use vulkano::instance::{Instance, InstanceCreateInfo};
+use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
+use vulkano::instance::debug::{DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo, ValidationFeatureEnable};
 use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::swapchain::{PresentMode, Surface, Swapchain, SwapchainCreateInfo};
 use vulkano::VulkanLibrary;
 use vulkano_win::required_extensions;
@@ -132,6 +134,7 @@ impl RuminativeInternals {
     world.insert_resource(ASingleton(queue));
     world.insert_resource(ASingleton(memory_allocator));
     world.insert_resource(ASingleton(swapchain));
+    world.insert_resource(Singleton(Viewport::default()));
     world.insert_resource(Singleton(images));
     Ok(())
   }

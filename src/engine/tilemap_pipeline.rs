@@ -1,4 +1,4 @@
-use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, GameViewport};
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use smallvec::smallvec;
@@ -25,7 +25,7 @@ use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::subpass::PipelineRenderingCreateInfo;
 use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
-use vulkano::pipeline::graphics::viewport::ViewportState;
+use vulkano::pipeline::graphics::viewport::{Viewport, ViewportState};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
@@ -92,7 +92,7 @@ impl TilemapPipeline {
         ..Default::default()
       },
       AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+        memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
         ..Default::default()
       },
       vertices,
@@ -248,6 +248,7 @@ impl TilemapPipeline {
     pipeline: Res<AssociatedResource<Self, Arc<GraphicsPipeline>>>,
     descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
     vertex_buffer: Res<AssociatedResource<Self, Subbuffer<[MVertex]>>>,
+    game_viewport: Res<GameViewport>,
   ) -> Resultat<()> {
     builder
       .bind_pipeline_graphics(pipeline.clone())?
@@ -259,6 +260,7 @@ impl TilemapPipeline {
       )?
       .bind_vertex_buffers(0, vertex_buffer.clone())?
       .push_constants(pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1] })?
+      .set_viewport(0, smallvec![Viewport { offset: game_viewport.pos, extent: game_viewport.size, depth_range: 0.0..=1.0 }])?
       .draw(4, vertex_buffer.len() as u32, 0, 0)?;
     Ok(())
   }

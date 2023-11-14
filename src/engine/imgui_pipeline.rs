@@ -1,4 +1,4 @@
-use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent, Singleton};
 use bevy_app::{App, Plugin, PreUpdate, Update};
 use bevy_ecs::prelude::*;
 use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key};
@@ -28,7 +28,7 @@ use vulkano::pipeline::graphics::multisample::MultisampleState;
 use vulkano::pipeline::graphics::rasterization::RasterizationState;
 use vulkano::pipeline::graphics::subpass::PipelineRenderingCreateInfo;
 use vulkano::pipeline::graphics::vertex_input::{Vertex, VertexDefinition};
-use vulkano::pipeline::graphics::viewport::{Scissor, ViewportState};
+use vulkano::pipeline::graphics::viewport::{Scissor, Viewport, ViewportState};
 use vulkano::pipeline::graphics::GraphicsPipelineCreateInfo;
 use vulkano::pipeline::layout::PipelineDescriptorSetLayoutCreateInfo;
 use vulkano::pipeline::{
@@ -475,17 +475,7 @@ impl ImguiPipeline {
     index_buffers.clear();
     vertex_buffers.clear();
     draw_commands.clear();
-    {
-      let ui = imgui.new_frame();
-      ui.dockspace_over_main_viewport();
-      ui.show_demo_window(&mut true);
-      unsafe {
-        let dock_id = imgui_sys::igGetID_Str(CString::new("Dockspace").unwrap().as_ptr());
-        let _dock = imgui_sys::igDockBuilderGetNode(dock_id);
-      }
-      // imgui::Pan
-      // ui.window("Bottom panel").dock
-    }
+
     let d = imgui.render();
     let mut i = 0;
     for dl in d.draw_lists() {
@@ -500,7 +490,7 @@ impl ImguiPipeline {
           ..Default::default()
         },
         AllocationCreateInfo {
-          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+          memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
           ..Default::default()
         },
         vertices.iter().cloned(),
@@ -516,7 +506,7 @@ impl ImguiPipeline {
           ..Default::default()
         },
         AllocationCreateInfo {
-          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+          memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
           ..Default::default()
         },
         indicies.iter().copied(),
@@ -551,6 +541,7 @@ impl ImguiPipeline {
     index_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[u16]>>>>,
     vertex_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
     draw_commands: Res<AssociatedResource<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>>,
+    viewport: Res<Singleton<Viewport>>
   ) -> Resultat<()> {
     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
     builder.bind_pipeline_graphics(pipeline.clone())?.bind_descriptor_sets(
@@ -584,6 +575,7 @@ impl ImguiPipeline {
             window_width: window.inner_size().to_logical(window.scale_factor()).width,
           },
         )?
+        .set_viewport(0, smallvec![viewport.0.clone()])?
         .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)?;
     }
     Ok(())

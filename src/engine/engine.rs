@@ -2,7 +2,7 @@ use crate::engine::imgui_pipeline::ImguiPipeline;
 use crate::engine::internals::RuminativeInternals;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
 use crate::engine::tilemap_pipeline::TilemapPipeline;
-use crate::engine::{ASingleton, PipelineRunner, Singleton, WinitEvent};
+use crate::engine::{ASingleton, GameViewport, PipelineRunner, Singleton, WinitEvent};
 use bevy_app::App;
 use smallvec::smallvec;
 use std::error::Error;
@@ -46,6 +46,8 @@ impl Ruminative {
 
     RuminativeInternals::new_in_app(&event_loop, &mut app)?;
 
+    app.init_resource::<GameViewport>();
+
     app.add_plugins(TilemapPipeline);
     app.add_plugins(RumiguiPipeline);
     app.add_plugins(ImguiPipeline);
@@ -59,9 +61,9 @@ impl Ruminative {
         .unwrap()
         .0;
       let images = &app.world.resource::<Singleton<Vec<Arc<Image>>>>().0;
-      // let viewport = &app.world.resource::<Singleton<Vec<Arc<Image>>>>().0;
       let mut viewport = Viewport::default();
       let mut images = window_size_dependent_setup(images, &mut viewport);
+      app.insert_resource(Singleton(viewport));
       let device = app.world.resource::<ASingleton<Device>>().clon();
       let queue = app.world.resource::<ASingleton<Queue>>().clon();
       let surface = app.world.resource::<ASingleton<Surface>>().clon();
@@ -105,6 +107,7 @@ impl Ruminative {
 
               app.insert_resource(ASingleton(new_swapchain));
 
+              let mut viewport = app.world.resource_mut::<Singleton<Viewport>>();
               images = window_size_dependent_setup(&new_images, &mut viewport);
 
               recreate_swapchain = false;
@@ -133,6 +136,7 @@ impl Ruminative {
               CommandBufferUsage::OneTimeSubmit,
             )
             .unwrap();
+            let viewport = app.world.resource::<Singleton<Viewport>>();
             builder
               .begin_rendering(RenderingInfo {
                 color_attachments: vec![Some(RenderingAttachmentInfo {
@@ -144,7 +148,7 @@ impl Ruminative {
                 ..Default::default()
               })
               .unwrap()
-              .set_viewport(0, smallvec![viewport.clone()])
+              .set_viewport(0, smallvec![viewport.0.clone()])
               .unwrap();
 
             app.insert_non_send_resource(builder);

@@ -58,3 +58,9 @@ impl<T> ASingleton<T> {
     self.0.clone()
   }
 }
+
+#[derive(Default, Resource)]
+pub struct GameViewport {
+  pub pos: [f32; 2],
+  pub size: [f32; 2]
+}
