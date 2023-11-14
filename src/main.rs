@@ -1,12 +1,10 @@
-use crate::engine::Ruminative;
-use crate::graphics::runner::run;
+use crate::engine::engine::Ruminative;
 use std::error::Error;
 
 mod engine;
-mod graphics;
 
 fn main() -> Result<(), Box<dyn Error>> {
-  let ctx = Ruminative::new()?;
-  run(ctx)?;
+  let mut ctx = Ruminative::new()?;
+  ctx.app.run();
   Ok(())
 }

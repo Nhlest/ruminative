@@ -1,4 +1,6 @@
-use crate::engine::{RuminativeInternals, RuminativePipeline};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat};
+use bevy_app::{App, Plugin};
+use bevy_ecs::prelude::*;
 use smallvec::smallvec;
 use std::error::Error;
 use std::io::Cursor;
@@ -31,37 +33,9 @@ use vulkano::pipeline::{
 };
 use vulkano::shader::EntryPoint;
 use vulkano::swapchain::Swapchain;
-use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
-use winit::window::Window;
 
-pub struct TilemapPipeline {
-  pub pipeline: Arc<GraphicsPipeline>,
-  pub descriptor_set: Arc<PersistentDescriptorSet>,
-  pub vertex_buffer: Subbuffer<[MVertex]>,
-}
-
-impl RuminativePipeline for TilemapPipeline {
-  fn bind<'a>(
-    &self,
-    builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-    _window: &Window,
-  ) -> Result<&'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
-    Ok(
-      builder
-        .bind_pipeline_graphics(self.pipeline.clone())?
-        .bind_descriptor_sets(
-          PipelineBindPoint::Graphics,
-          self.pipeline.layout().clone(),
-          0,
-          self.descriptor_set.clone(),
-        )?
-        .bind_vertex_buffers(0, self.vertex_buffer.clone())?
-        .push_constants(self.pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1] })?
-        .draw(4, self.vertex_buffer.len() as u32, 0, 0)?,
-    )
-  }
-}
+pub struct TilemapPipeline;
 
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
@@ -131,7 +105,7 @@ impl TilemapPipeline {
     queue: Arc<Queue>,
     pipeline: Arc<GraphicsPipeline>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-  ) -> Result<(Arc<PersistentDescriptorSet>, Option<Box<dyn GpuFuture>>), Box<dyn Error>> {
+  ) -> Result<Arc<PersistentDescriptorSet>, Box<dyn Error>> {
     let descriptor_set_allocator =
       StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
     let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
@@ -202,9 +176,9 @@ impl TilemapPipeline {
       [],
     )?;
 
-    let previous_frame_end = Some(uploads.build()?.execute(queue)?.boxed());
+    let _future = uploads.build()?.execute(queue)?;
 
-    Ok((set, previous_frame_end))
+    Ok(set)
   }
 
   fn pipeline(
@@ -254,40 +228,46 @@ impl TilemapPipeline {
     Ok(pipeline)
   }
 
-  pub fn new(
-    ruminative_internals: &RuminativeInternals,
-    future: Option<Box<dyn GpuFuture>>,
-  ) -> Result<(Self, Box<dyn GpuFuture>), Box<dyn Error>> {
-    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(
-      ruminative_internals.device.clone(),
-    ));
-    let (vs, fs) = Self::shaders(ruminative_internals.device.clone())?;
-    let pipeline = Self::pipeline(
-      ruminative_internals.device.clone(),
-      ruminative_internals.swapchain.clone(),
-      vs,
-      fs,
-    )?;
-    let (descriptor_set, previous_frame_end) = Self::sampler(
-      ruminative_internals.device.clone(),
-      ruminative_internals.queue.clone(),
-      pipeline.clone(),
-      memory_allocator.clone(),
-    )?;
+  fn init(app: &mut App) -> Resultat<()> {
+    let device = app.world.resource::<ASingleton<Device>>();
+    let swapchain = app.world.resource::<ASingleton<Swapchain>>();
+    let queue = app.world.resource::<ASingleton<Queue>>();
+    let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clon()));
+    let (vs, fs) = Self::shaders(device.clon())?;
+    let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
+    let descriptor_set = Self::sampler(device.clon(), queue.clon(), pipeline.clone(), memory_allocator.clone())?;
     let vertex_buffer = Self::vertex_buffer(memory_allocator)?;
-    let previous_frame_end = if let Some(future) = future {
-      future.join(previous_frame_end.unwrap()).boxed()
-    } else {
-      previous_frame_end.unwrap()
-    };
+    app.insert_resource(AssociatedResource::<Self, _>::new(pipeline));
+    app.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
+    app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
+    Ok(())
+  }
 
-    Ok((
-      Self {
-        pipeline,
-        descriptor_set,
-        vertex_buffer,
-      },
-      previous_frame_end,
-    ))
+  fn bind(
+    mut builder: NonSendMut<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
+    pipeline: Res<AssociatedResource<Self, Arc<GraphicsPipeline>>>,
+    descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
+    vertex_buffer: Res<AssociatedResource<Self, Subbuffer<[MVertex]>>>,
+  ) -> Resultat<()> {
+    builder
+      .bind_pipeline_graphics(pipeline.clone())?
+      .bind_descriptor_sets(
+        PipelineBindPoint::Graphics,
+        pipeline.layout().clone(),
+        0,
+        descriptor_set.clone(),
+      )?
+      .bind_vertex_buffers(0, vertex_buffer.clone())?
+      .push_constants(pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1] })?
+      .draw(4, vertex_buffer.len() as u32, 0, 0)?;
+    Ok(())
+  }
+}
+
+impl Plugin for TilemapPipeline {
+  fn build(&self, app: &mut App) {
+    TilemapPipeline::init(app).unwrap();
+    let system_id = app.world.register_system(TilemapPipeline::bind.pipe(handle_result));
+    app.world.resource_mut::<PipelineRunner>().order.push(system_id);
   }
 }

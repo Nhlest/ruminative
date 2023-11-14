@@ -1,5 +1,7 @@
-use crate::engine::{RuminativeInternals, RuminativePipeline};
-use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawIdx, DrawVert, FontAtlasTexture, FontSource, Io, Key};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent};
+use bevy_app::{App, Plugin, PreUpdate, Update};
+use bevy_ecs::prelude::*;
+use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key};
 use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::error::Error;
@@ -33,7 +35,7 @@ use vulkano::pipeline::{
   DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
 };
 use vulkano::shader::EntryPoint;
-use vulkano::swapchain::Swapchain;
+use vulkano::swapchain::{Surface, Swapchain};
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
 use winit::event::{
@@ -41,16 +43,6 @@ use winit::event::{
   WindowEvent,
 };
 use winit::window::Window;
-// use crate::engine::tilemap_pipeline::MVertex;
-
-pub struct ImguiPipeline {
-  pub pipeline: Arc<GraphicsPipeline>,
-  pub descriptor_set: Arc<PersistentDescriptorSet>,
-  pub vertex_buffers: Vec<Subbuffer<[DrawVertPod]>>,
-  pub index_buffers: Vec<Subbuffer<[DrawIdx]>>, // u16
-  pub draw_commands: Vec<(usize, u32, u32, i32, [f32; 4])>,
-  pub imgui: Context,
-}
 
 fn to_imgui_mouse_button(button: MouseButton) -> Option<imgui::MouseButton> {
   match button {
@@ -277,142 +269,7 @@ fn handle_window_event(io: &mut Io, window: &Window, event: &WindowEvent) {
   }
 }
 
-impl RuminativePipeline for ImguiPipeline {
-  fn update(&mut self, ruminative_internals: &RuminativeInternals) {
-    self.index_buffers.clear();
-    self.vertex_buffers.clear();
-    self.draw_commands.clear();
-    {
-      let ui = self.imgui.new_frame();
-      ui.dockspace_over_main_viewport();
-      ui.show_demo_window(&mut true);
-      unsafe {
-        let dock_id = imgui_sys::igGetID_Str(CString::new("Dockspace").unwrap().as_ptr());
-        let _dock = imgui_sys::igDockBuilderGetNode(dock_id);
-      }
-      // imgui::Pan
-      // ui.window("Bottom panel").dock
-    }
-    let d = self.imgui.render();
-    let mut i = 0;
-    for dl in d.draw_lists() {
-      assert_eq!(core::mem::size_of::<DrawVertPod>(), core::mem::size_of::<DrawVert>(),);
-      assert!(core::mem::align_of::<DrawVertPod>() <= core::mem::align_of::<DrawVert>());
-      let vertices: &[DrawVertPod] =
-        unsafe { slice::from_raw_parts(dl.vtx_buffer().as_ptr().cast(), dl.vtx_buffer().len()) };
-      let vertex_buffer = Buffer::from_iter(
-        ruminative_internals.memory_allocator.clone(),
-        BufferCreateInfo {
-          usage: BufferUsage::VERTEX_BUFFER,
-          ..Default::default()
-        },
-        AllocationCreateInfo {
-          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
-          ..Default::default()
-        },
-        vertices.iter().cloned(),
-      )
-      .unwrap();
-
-      self.vertex_buffers.push(vertex_buffer);
-      let indicies = dl.idx_buffer();
-      let index_buffer = Buffer::from_iter(
-        ruminative_internals.memory_allocator.clone(),
-        BufferCreateInfo {
-          usage: BufferUsage::INDEX_BUFFER,
-          ..Default::default()
-        },
-        AllocationCreateInfo {
-          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
-          ..Default::default()
-        },
-        indicies.iter().copied(),
-      )
-      .unwrap();
-      self.index_buffers.push(index_buffer);
-
-      for cmd in dl.commands() {
-        match cmd {
-          DrawCmd::Elements { count, cmd_params } => {
-            self.draw_commands.push((
-              i,
-              count as u32,
-              cmd_params.idx_offset as u32,
-              cmd_params.vtx_offset as i32,
-              cmd_params.clip_rect,
-            ));
-          }
-          DrawCmd::ResetRenderState => {}
-          DrawCmd::RawCallback { .. } => {}
-        }
-      }
-      i += 1;
-    }
-  }
-  fn bind<'a>(
-    &self,
-    builder: &'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>,
-    window: &Window,
-  ) -> Result<&'a mut AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>, Box<dyn Error>> {
-    builder
-      .bind_pipeline_graphics(self.pipeline.clone())?
-      .bind_descriptor_sets(
-        PipelineBindPoint::Graphics,
-        self.pipeline.layout().clone(),
-        0,
-        self.descriptor_set.clone(),
-      )?;
-    for (buf, index_count, first_index, vertex_offset, clip_rect) in &self.draw_commands {
-      builder
-        .bind_vertex_buffers(0, self.vertex_buffers[*buf].clone())?
-        .bind_index_buffer(self.index_buffers[*buf].clone())?
-        .set_scissor(
-          0,
-          smallvec![Scissor {
-            offset: [
-              (f32::max(0.0, clip_rect[0]) * window.scale_factor() as f32) as u32,
-              (f32::max(0.0, clip_rect[1]) * window.scale_factor() as f32) as u32,
-            ],
-            extent: [
-              ((clip_rect[2] - clip_rect[0]).abs().ceil() * window.scale_factor() as f32) as u32,
-              ((clip_rect[3] - clip_rect[1]).abs().ceil() * window.scale_factor() as f32) as u32,
-            ],
-          }],
-        )?
-        .push_constants(
-          self.pipeline.layout().clone(),
-          0,
-          vs::PushConstants {
-            window_height: window.inner_size().to_logical(window.scale_factor()).height,
-            window_width: window.inner_size().to_logical(window.scale_factor()).width,
-          },
-        )?
-        .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)?;
-    }
-    Ok(builder)
-  }
-  fn handle_event(&mut self, window: &Window, event: &Event<()>) {
-    match *event {
-      Event::WindowEvent { window_id, ref event } if window_id == window.id() => {
-        handle_window_event(self.imgui.io_mut(), window, event);
-      }
-      Event::DeviceEvent {
-        event:
-          DeviceEvent::Key(KeyboardInput {
-            state: ElementState::Released,
-            virtual_keycode: Some(key),
-            ..
-          }),
-        ..
-      } => {
-        if let Some(key) = to_imgui_key(key) {
-          self.imgui.io_mut().add_key_event(key, false);
-        }
-      }
-      _ => (),
-    }
-  }
-}
+pub struct ImguiPipeline;
 
 #[derive(BufferContents, Vertex, Clone)]
 #[repr(C)]
@@ -565,38 +422,25 @@ impl ImguiPipeline {
     Ok(pipeline)
   }
 
-  pub fn new(
-    ruminative_internals: &RuminativeInternals,
-    future: Option<Box<dyn GpuFuture>>,
-  ) -> Result<(Self, Box<dyn GpuFuture>), Box<dyn Error>> {
-    let memory_allocator = ruminative_internals.memory_allocator.clone();
-    let (vs, fs) = Self::shaders(ruminative_internals.device.clone())?;
-    let pipeline = Self::pipeline(
-      ruminative_internals.device.clone(),
-      ruminative_internals.swapchain.clone(),
-      vs,
-      fs,
-    )?;
+  fn init(app: &mut App) -> Resultat<()> {
+    let memory_allocator = app.world.resource::<ASingleton<StandardMemoryAllocator>>();
+    let device = app.world.resource::<ASingleton<Device>>();
+    let swapchain = app.world.resource::<ASingleton<Swapchain>>();
+    let queue = app.world.resource::<ASingleton<Queue>>();
+    let (vs, fs) = Self::shaders(device.clon())?;
+    let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
 
     let mut imgui = Context::create();
     imgui.fonts().add_font(&[FontSource::DefaultFontData { config: None }]);
     let tex = imgui.fonts().build_rgba32_texture();
 
-    let (descriptor_set, previous_frame_end) = Self::sampler(
-      ruminative_internals.device.clone(),
-      ruminative_internals.queue.clone(),
+    let (descriptor_set, _previous_frame_end) = Self::sampler(
+      device.clon(),
+      queue.clon(),
       pipeline.clone(),
-      memory_allocator,
+      memory_allocator.clon(),
       tex,
     )?;
-    // let vertex_buffer = Self::vertex_buffer(&memory_allocator)?;
-    // let index_buffer = Self::index_buffer(&memory_allocator)?;
-    let previous_frame_end = if let Some(future) = future {
-      // future.join(previous_frame_end.unwrap()).boxed()
-      future
-    } else {
-      previous_frame_end.unwrap()
-    };
 
     let io = imgui.io_mut();
     io.display_size = [800.0, 600.0];
@@ -608,16 +452,179 @@ impl ImguiPipeline {
     imgui.set_platform_name(Some(format!("imgui-winit-support {}", env!("CARGO_PKG_VERSION"))));
     imgui.set_renderer_name(Some(format!("imgui-glium-renderer {}", env!("CARGO_PKG_VERSION"))));
 
-    Ok((
-      Self {
-        pipeline,
-        descriptor_set,
-        vertex_buffers: vec![],
-        index_buffers: vec![],
-        draw_commands: vec![],
-        imgui,
-      },
-      previous_frame_end,
-    ))
+    app.insert_resource(AssociatedResource::<Self, _>::new(pipeline));
+    app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
+    app.insert_resource(AssociatedResource::<Self, Vec<Subbuffer<[u16]>>>::new(vec![]));
+    app.insert_resource(AssociatedResource::<Self, Vec<Subbuffer<[DrawVertPod]>>>::new(vec![]));
+    app.insert_resource(AssociatedResource::<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>::new(
+      vec![],
+    ));
+    app.insert_non_send_resource(imgui);
+    Ok(())
+  }
+}
+
+impl ImguiPipeline {
+  fn update(
+    memory_allocator: Res<ASingleton<StandardMemoryAllocator>>,
+    mut index_buffers: ResMut<AssociatedResource<Self, Vec<Subbuffer<[u16]>>>>,
+    mut vertex_buffers: ResMut<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
+    mut draw_commands: ResMut<AssociatedResource<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>>,
+    mut imgui: NonSendMut<Context>,
+  ) {
+    index_buffers.clear();
+    vertex_buffers.clear();
+    draw_commands.clear();
+    {
+      let ui = imgui.new_frame();
+      ui.dockspace_over_main_viewport();
+      ui.show_demo_window(&mut true);
+      unsafe {
+        let dock_id = imgui_sys::igGetID_Str(CString::new("Dockspace").unwrap().as_ptr());
+        let _dock = imgui_sys::igDockBuilderGetNode(dock_id);
+      }
+      // imgui::Pan
+      // ui.window("Bottom panel").dock
+    }
+    let d = imgui.render();
+    let mut i = 0;
+    for dl in d.draw_lists() {
+      assert_eq!(core::mem::size_of::<DrawVertPod>(), core::mem::size_of::<DrawVert>(),);
+      assert!(core::mem::align_of::<DrawVertPod>() <= core::mem::align_of::<DrawVert>());
+      let vertices: &[DrawVertPod] =
+        unsafe { slice::from_raw_parts(dl.vtx_buffer().as_ptr().cast(), dl.vtx_buffer().len()) };
+      let vertex_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+          usage: BufferUsage::VERTEX_BUFFER,
+          ..Default::default()
+        },
+        AllocationCreateInfo {
+          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+          ..Default::default()
+        },
+        vertices.iter().cloned(),
+      )
+      .unwrap();
+
+      vertex_buffers.push(vertex_buffer);
+      let indicies = dl.idx_buffer();
+      let index_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+          usage: BufferUsage::INDEX_BUFFER,
+          ..Default::default()
+        },
+        AllocationCreateInfo {
+          memory_type_filter: MemoryTypeFilter::PREFER_HOST,
+          ..Default::default()
+        },
+        indicies.iter().copied(),
+      )
+      .unwrap();
+      index_buffers.push(index_buffer);
+
+      for cmd in dl.commands() {
+        match cmd {
+          DrawCmd::Elements { count, cmd_params } => {
+            draw_commands.push((
+              i,
+              count as u32,
+              cmd_params.idx_offset as u32,
+              cmd_params.vtx_offset as i32,
+              cmd_params.clip_rect,
+            ));
+          }
+          DrawCmd::ResetRenderState => {}
+          DrawCmd::RawCallback { .. } => {}
+        }
+      }
+      i += 1;
+    }
+  }
+
+  fn bind(
+    mut builder: NonSendMut<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
+    surface: Res<ASingleton<Surface>>,
+    pipeline: Res<AssociatedResource<Self, Arc<GraphicsPipeline>>>,
+    descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
+    index_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[u16]>>>>,
+    vertex_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
+    draw_commands: Res<AssociatedResource<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>>,
+  ) -> Resultat<()> {
+    let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+    builder.bind_pipeline_graphics(pipeline.clone())?.bind_descriptor_sets(
+      PipelineBindPoint::Graphics,
+      pipeline.layout().clone(),
+      0,
+      descriptor_set.clone(),
+    )?;
+    for (buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
+      builder
+        .bind_vertex_buffers(0, vertex_buffers[*buf].clone())?
+        .bind_index_buffer(index_buffers[*buf].clone())?
+        .set_scissor(
+          0,
+          smallvec![Scissor {
+            offset: [
+              (f32::max(0.0, clip_rect[0]) * window.scale_factor() as f32) as u32,
+              (f32::max(0.0, clip_rect[1]) * window.scale_factor() as f32) as u32,
+            ],
+            extent: [
+              ((clip_rect[2] - clip_rect[0]).abs().ceil() * window.scale_factor() as f32) as u32,
+              ((clip_rect[3] - clip_rect[1]).abs().ceil() * window.scale_factor() as f32) as u32,
+            ],
+          }],
+        )?
+        .push_constants(
+          pipeline.layout().clone(),
+          0,
+          vs::PushConstants {
+            window_height: window.inner_size().to_logical(window.scale_factor()).height,
+            window_width: window.inner_size().to_logical(window.scale_factor()).width,
+          },
+        )?
+        .draw_indexed(*index_count, 1, *first_index, *vertex_offset, 0)?;
+    }
+    Ok(())
+  }
+  fn handle_event(
+    mut events: EventReader<WinitEvent>,
+    mut imgui: NonSendMut<Context>,
+    surface: Res<ASingleton<Surface>>,
+  ) {
+    let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
+    for event in events.read() {
+      match event.0 {
+        Event::WindowEvent { window_id, ref event } if window_id == window.id() => {
+          handle_window_event(imgui.io_mut(), window, event);
+        }
+        Event::DeviceEvent {
+          event:
+            DeviceEvent::Key(KeyboardInput {
+              state: ElementState::Released,
+              virtual_keycode: Some(key),
+              ..
+            }),
+          ..
+        } => {
+          if let Some(key) = to_imgui_key(key) {
+            imgui.io_mut().add_key_event(key, false);
+          }
+        }
+        _ => (),
+      }
+    }
+  }
+}
+
+impl Plugin for ImguiPipeline {
+  fn build(&self, app: &mut App) {
+    ImguiPipeline::init(app).unwrap();
+    app.add_systems(PreUpdate, ImguiPipeline::handle_event);
+    app.add_systems(Update, ImguiPipeline::update);
+
+    let system_id = app.world.register_system(ImguiPipeline::bind.pipe(handle_result));
+    app.world.resource_mut::<PipelineRunner>().order.push(system_id);
   }
 }
