@@ -4,6 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
+use vulkano::format::Format;
 use vulkano::image::{Image, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateInfo, InstanceExtensions};
 use vulkano::instance::debug::{DebugUtilsMessenger, DebugUtilsMessengerCallback, DebugUtilsMessengerCreateInfo, ValidationFeatureEnable};
@@ -97,7 +98,8 @@ impl RuminativeInternals {
     let surface_capabilities = device
       .physical_device()
       .surface_capabilities(&surface, Default::default())?;
-    let image_format = device.physical_device().surface_formats(&surface, Default::default())?[0].0;
+    // let image_format = device.physical_device().surface_formats(&surface, Default::default())?[0].0;
+    let image_format = Format::R8G8B8A8_UNORM;
     let window = surface
       .object()
       .ok_or("No object")?

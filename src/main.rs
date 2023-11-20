@@ -1,9 +1,11 @@
+#![feature(adt_const_params)]
+
 use crate::engine::engine::Ruminative;
 use std::error::Error;
 use std::ffi::CString;
 use bevy_app::Update;
 use bevy_ecs::prelude::*;
-use imgui::{Context, StyleVar};
+use imgui::{Context, StyleVar, TextureId};
 use vulkano::swapchain::Surface;
 use winit::window::Window;
 use crate::engine::{ASingleton, GameViewport};
@@ -23,13 +25,20 @@ fn gui(
     ui.dockspace_over_main_viewport();
   }
 
+  let t = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
   ui.window("viewport")
     .bg_alpha(0.0)
+    .resizable(true)
     .build(|| {
-      let pos = ui.window_pos();
-      let size = ui.window_size();
-      game_viewport.pos = [pos[0] * scale_factor as f32, pos[1] * scale_factor as f32];
-      game_viewport.size = [size[0] * scale_factor as f32, size[1] * scale_factor as f32];
+      let mut min = ui.window_content_region_min();
+      let mut max = ui.window_content_region_max();
+
+      let x = max[0]-min[0];
+      let y = max[1]-min[1];
+      imgui::Image::new(TextureId::new(1), [x, y])
+        .uv0([0.0, 0.0])
+        .uv1([1.0, 1.0])
+        .build(ui);
   });
 
   ui.show_demo_window(&mut true);

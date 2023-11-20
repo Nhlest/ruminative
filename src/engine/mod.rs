@@ -11,6 +11,7 @@ pub mod imgui_pipeline;
 pub mod rumigui_pipeline;
 pub mod tilemap;
 pub mod tilemap_pipeline;
+pub mod barrier_pipeline;
 
 pub mod engine;
 pub mod internals;
@@ -54,6 +55,18 @@ pub struct Singleton<T>(pub T);
 pub struct ASingleton<T>(pub Arc<T>);
 
 impl<T> ASingleton<T> {
+  pub fn clon(&self) -> Arc<T> {
+    self.0.clone()
+  }
+}
+
+#[derive(Resource, Deref, DerefMut)]
+pub struct NamedSingleton<const N: &'static str, T>(T);
+
+#[derive(Resource, Deref, DerefMut)]
+pub struct ANamedSingleton<const N: &'static str, T>(Arc<T>);
+
+impl<const N: &'static str, T> ANamedSingleton<N, T> {
   pub fn clon(&self) -> Arc<T> {
     self.0.clone()
   }

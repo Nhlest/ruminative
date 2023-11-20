@@ -1,4 +1,4 @@
-use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, GameViewport};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, GameViewport, Singleton, ANamedSingleton};
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use smallvec::smallvec;
@@ -7,14 +7,11 @@ use std::io::Cursor;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{
-  AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer,
-  PrimaryCommandBufferAbstract,
-};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, ClearAttachment, ClearColorImageInfo, ClearRect, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
-use vulkano::format::Format;
+use vulkano::format::{ClearColorValue, Format};
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
@@ -34,6 +31,7 @@ use vulkano::pipeline::{
 use vulkano::shader::EntryPoint;
 use vulkano::swapchain::Swapchain;
 use vulkano::DeviceSize;
+use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 
 pub struct TilemapPipeline;
 
@@ -228,6 +226,47 @@ impl TilemapPipeline {
     Ok(pipeline)
   }
 
+  fn texture(memory_allocator: Arc<StandardMemoryAllocator>, device: Arc<Device>, pipeline: Arc<GraphicsPipeline>) -> Resultat<(Arc<ImageView>, Arc<PersistentDescriptorSet>)> {
+    let descriptor_set_allocator =
+      StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
+    let image = Image::new(
+      memory_allocator,
+      ImageCreateInfo {
+        usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
+        format: Format::R8G8B8A8_UNORM,
+        image_type: ImageType::Dim2d,
+        extent: [800, 600, 1],
+        ..Default::default()
+      },
+      AllocationCreateInfo {
+        memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+        ..Default::default()
+      },
+    )?;
+
+    let image_view = ImageView::new_default(image).unwrap();
+
+    let sampler = Sampler::new(
+      device,
+      SamplerCreateInfo {
+        mag_filter: Filter::Linear,
+        min_filter: Filter::Linear,
+        address_mode: [SamplerAddressMode::Repeat; 3],
+        ..Default::default()
+      },
+    )?;
+
+    let layout = pipeline.layout().set_layouts().get(0).unwrap();
+    let set = PersistentDescriptorSet::new(
+      &descriptor_set_allocator,
+      layout.clone(),
+      [WriteDescriptorSet::image_view_sampler(0, image_view.clone(), sampler)],
+      [],
+    )?;
+
+    Ok((image_view, set))
+  }
+
   fn init(app: &mut App) -> Resultat<()> {
     let device = app.world.resource::<ASingleton<Device>>();
     let swapchain = app.world.resource::<ASingleton<Swapchain>>();
@@ -236,7 +275,11 @@ impl TilemapPipeline {
     let (vs, fs) = Self::shaders(device.clon())?;
     let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
     let descriptor_set = Self::sampler(device.clon(), queue.clon(), pipeline.clone(), memory_allocator.clone())?;
-    let vertex_buffer = Self::vertex_buffer(memory_allocator)?;
+    let vertex_buffer = Self::vertex_buffer(memory_allocator.clone())?;
+    let (image_view, set) = Self::texture(memory_allocator, device.clon(), pipeline.clone())?;
+
+    app.insert_resource(ASingleton(image_view));
+    app.insert_resource(ANamedSingleton::<"X", _>(set));
     app.insert_resource(AssociatedResource::<Self, _>::new(pipeline));
     app.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
     app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
@@ -248,10 +291,22 @@ impl TilemapPipeline {
     pipeline: Res<AssociatedResource<Self, Arc<GraphicsPipeline>>>,
     descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
     vertex_buffer: Res<AssociatedResource<Self, Subbuffer<[MVertex]>>>,
-    game_viewport: Res<GameViewport>,
+    // game_viewport: Res<GameViewport>,
+    viewport: Res<Singleton<Viewport>>,
+    image_view: Res<ASingleton<ImageView>>
   ) -> Resultat<()> {
     builder
+      .begin_rendering(RenderingInfo {
+        color_attachments: vec![Some(RenderingAttachmentInfo {
+          load_op: AttachmentLoadOp::Clear,
+          store_op: AttachmentStoreOp::Store,
+          clear_value: Some([0.0, 0.1, 0.1, 1.0].into()),
+          ..RenderingAttachmentInfo::image_view(image_view.clon())
+        })],
+        ..Default::default()
+      })?
       .bind_pipeline_graphics(pipeline.clone())?
+      // .clear_attachments(smallvec![ClearAttachment::Color {clear_value: ClearColorValue::Float([0.1, 0.0, 0.0, 1.0]), color_attachment: 0}], smallvec![ClearRect { offset: [game_viewport.pos[0] as u32, game_viewport.pos[1] as u32], extent: [game_viewport.size[0] as u32, game_viewport.size[1] as u32], array_layers: 0..1 }])?
       .bind_descriptor_sets(
         PipelineBindPoint::Graphics,
         pipeline.layout().clone(),
@@ -260,7 +315,9 @@ impl TilemapPipeline {
       )?
       .bind_vertex_buffers(0, vertex_buffer.clone())?
       .push_constants(pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1] })?
-      .set_viewport(0, smallvec![Viewport { offset: game_viewport.pos, extent: game_viewport.size, depth_range: 0.0..=1.0 }])?
+      // .set_viewport(0, smallvec![Viewport { offset: game_viewport.pos, extent: game_viewport.size, depth_range: 0.0..=1.0 }])?
+      // .set_viewport(0, smallvec![viewport.0.clone()])?
+      .set_viewport(0, smallvec![Viewport { offset: [0.0, 0.0], extent: [800.0, 600.0], depth_range: 0.0..=1.0 }])?
       .draw(4, vertex_buffer.len() as u32, 0, 0)?;
     Ok(())
   }

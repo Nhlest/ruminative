@@ -1,4 +1,4 @@
-use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent, Singleton};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent, Singleton, ANamedSingleton};
 use bevy_app::{App, Plugin, PreUpdate, Update};
 use bevy_ecs::prelude::*;
 use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key};
@@ -10,10 +10,7 @@ use std::slice;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{
-  AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer,
-  PrimaryCommandBufferAbstract,
-};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
@@ -38,6 +35,7 @@ use vulkano::shader::EntryPoint;
 use vulkano::swapchain::{Surface, Swapchain};
 use vulkano::sync::GpuFuture;
 use vulkano::DeviceSize;
+use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use winit::event::{
   DeviceEvent, ElementState, Event, KeyboardInput, MouseButton, MouseScrollDelta, TouchPhase, VirtualKeyCode,
   WindowEvent,
@@ -456,7 +454,7 @@ impl ImguiPipeline {
     app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
     app.insert_resource(AssociatedResource::<Self, Vec<Subbuffer<[u16]>>>::new(vec![]));
     app.insert_resource(AssociatedResource::<Self, Vec<Subbuffer<[DrawVertPod]>>>::new(vec![]));
-    app.insert_resource(AssociatedResource::<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>::new(
+    app.insert_resource(AssociatedResource::<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>::new(
       vec![],
     ));
     app.insert_non_send_resource(imgui);
@@ -469,7 +467,7 @@ impl ImguiPipeline {
     memory_allocator: Res<ASingleton<StandardMemoryAllocator>>,
     mut index_buffers: ResMut<AssociatedResource<Self, Vec<Subbuffer<[u16]>>>>,
     mut vertex_buffers: ResMut<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
-    mut draw_commands: ResMut<AssociatedResource<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>>,
+    mut draw_commands: ResMut<AssociatedResource<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>>,
     mut imgui: NonSendMut<Context>,
   ) {
     index_buffers.clear();
@@ -518,6 +516,7 @@ impl ImguiPipeline {
         match cmd {
           DrawCmd::Elements { count, cmd_params } => {
             draw_commands.push((
+              cmd_params.texture_id.id(),
               i,
               count as u32,
               cmd_params.idx_offset as u32,
@@ -540,17 +539,44 @@ impl ImguiPipeline {
     descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
     index_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[u16]>>>>,
     vertex_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
-    draw_commands: Res<AssociatedResource<Self, Vec<(usize, u32, u32, i32, [f32; 4])>>>,
-    viewport: Res<Singleton<Viewport>>
+    draw_commands: Res<AssociatedResource<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>>,
+    viewport: Res<Singleton<Viewport>>,
+    texture: Res<ASingleton<ImageView>>,
+    texture_set: Res<ANamedSingleton<"X", PersistentDescriptorSet>>,
+    framebuffer: Res<ANamedSingleton<"Output", ImageView>>
   ) -> Resultat<()> {
     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
-    builder.bind_pipeline_graphics(pipeline.clone())?.bind_descriptor_sets(
-      PipelineBindPoint::Graphics,
-      pipeline.layout().clone(),
-      0,
-      descriptor_set.clone(),
-    )?;
-    for (buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
+    builder
+      .begin_rendering(RenderingInfo {
+        color_attachments: vec![Some(RenderingAttachmentInfo {
+          load_op: AttachmentLoadOp::Clear,
+          store_op: AttachmentStoreOp::Store,
+          clear_value: Some([0.0, 0.0, 0.1, 1.0].into()),
+          ..RenderingAttachmentInfo::image_view(framebuffer.clon())
+        })],
+        ..Default::default()
+      })
+      .unwrap()
+      .set_viewport(0, smallvec![viewport.0.clone()])
+      .unwrap();
+    for (texture, buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
+      if *texture == 1 {
+        builder.bind_pipeline_graphics(pipeline.clone())?
+          .bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            pipeline.layout().clone(),
+            0,
+            texture_set.clon(),
+          )?;
+      } else {
+        builder.bind_pipeline_graphics(pipeline.clone())?
+          .bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            pipeline.layout().clone(),
+            0,
+            descriptor_set.clone(),
+          )?;
+      }
       builder
         .bind_vertex_buffers(0, vertex_buffers[*buf].clone())?
         .bind_index_buffer(index_buffers[*buf].clone())?

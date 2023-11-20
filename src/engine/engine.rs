@@ -2,7 +2,7 @@ use crate::engine::imgui_pipeline::ImguiPipeline;
 use crate::engine::internals::RuminativeInternals;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
 use crate::engine::tilemap_pipeline::TilemapPipeline;
-use crate::engine::{ASingleton, GameViewport, PipelineRunner, Singleton, WinitEvent};
+use crate::engine::{ANamedSingleton, ASingleton, AssociatedResource, GameViewport, PipelineRunner, Singleton, WinitEvent};
 use bevy_app::App;
 use smallvec::smallvec;
 use std::error::Error;
@@ -12,16 +12,18 @@ use vulkano::command_buffer::{
   AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderingAttachmentInfo, RenderingInfo,
 };
 use vulkano::device::{Device, Queue};
-use vulkano::image::view::ImageView;
+use vulkano::image::view::{ImageView, ImageViewCreateInfo};
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use vulkano::swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, Validated, VulkanError};
+use vulkano::pipeline::PipelineBindPoint;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
+use crate::engine::barrier_pipeline::BarrierPipeline;
 
 pub struct Ruminative {
   pub app: App,
@@ -50,6 +52,7 @@ impl Ruminative {
 
     app.add_plugins(TilemapPipeline);
     app.add_plugins(RumiguiPipeline);
+    app.add_plugins(BarrierPipeline);
     app.add_plugins(ImguiPipeline);
 
     app.insert_non_send_resource(Singleton(event_loop));
@@ -137,22 +140,10 @@ impl Ruminative {
             )
             .unwrap();
             let viewport = app.world.resource::<Singleton<Viewport>>();
-            builder
-              .begin_rendering(RenderingInfo {
-                color_attachments: vec![Some(RenderingAttachmentInfo {
-                  load_op: AttachmentLoadOp::Clear,
-                  store_op: AttachmentStoreOp::Store,
-                  clear_value: Some([0.0, 0.0, 0.1, 1.0].into()),
-                  ..RenderingAttachmentInfo::image_view(images[image_index as usize].clone())
-                })],
-                ..Default::default()
-              })
-              .unwrap()
-              .set_viewport(0, smallvec![viewport.0.clone()])
-              .unwrap();
+
+            app.world.insert_resource(ANamedSingleton::<"Output", _>(images[image_index as usize].clone()));
 
             app.insert_non_send_resource(builder);
-
             app.update();
             for i in app.world.resource::<PipelineRunner>().order.clone() {
               app.world.run_system(i).unwrap();
@@ -164,7 +155,6 @@ impl Ruminative {
               .unwrap();
 
             builder.end_rendering().unwrap();
-
             let command_buffer = builder.build().unwrap();
 
             let future = previous_frame_end
