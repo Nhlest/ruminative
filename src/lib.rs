@@ -5,6 +5,7 @@ use bevy_app::{PluginGroup, PluginGroupBuilder};
 use crate::editor::RuminativeEditorPlugin;
 use crate::engine::engine::RuminativeEnginePlugin;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
+use crate::systems::SystemRunnerPlugin;
 
 pub mod bevy {
   pub use bevy_ecs::prelude::*;
@@ -22,6 +23,7 @@ pub mod imgui {
 
 pub mod engine;
 pub mod editor;
+pub mod systems;
 
 pub struct Ruminative;
 
@@ -30,5 +32,6 @@ impl PluginGroup for Ruminative {
     PluginGroupBuilder::start::<Self>()
       .add(RuminativeEnginePlugin)
       .add(RuminativeEditorPlugin)
+      .add(SystemRunnerPlugin)
   }
 }

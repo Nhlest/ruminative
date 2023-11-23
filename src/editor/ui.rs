@@ -1,10 +1,62 @@
+use crate::systems::SystemStorage;
 use std::mem::ManuallyDrop;
 use bevy_ecs::prelude::*;
 use bevy_app::prelude::*;
-use imgui::{Context, Image, StyleVar, TextureId, Ui};
+use bevy_ecs::system::SystemId;
+use imgui::{Context, DragDropFlags, Image, StyleVar, TextureId, Ui};
 use imgui_sys::ImGuiContext;
 use vulkano::swapchain::Surface;
 use crate::engine::ASingleton;
+use crate::engine::tilemap_pipeline::{Cell, OnKeyPress, Transform};
+
+pub fn systems_ui(
+  mut commands: Commands,
+  mut imgui: NonSendMut<Context>,
+  mut systems: ResMut<SystemStorage>
+) {
+  let ui = imgui.current_frame();
+  ui.window("System storage")
+    .build(|| {
+      for (system_id, system_name) in systems.s.iter_mut() {
+        if ui.button(format!("System {}", system_name)) {
+          commands.run_system(*system_id);
+        }
+        let drag_source = ui.drag_drop_source_config("SYSTEM");
+        if let Some(d) = drag_source.begin_payload(*system_id) {
+          ui.text(format!("{}", system_name))
+        }
+      }
+    });
+}
+
+pub fn inspector_ui(
+  mut imgui: NonSendMut<Context>,
+  mut cells: Query<(Entity, &mut Transform, &mut OnKeyPress), With<Cell>>,
+  system_storage: Res<SystemStorage>
+) {
+  let ui = imgui.current_frame();
+  ui.window("Inspector")
+    .build(|| {
+      for (entity, mut transform, mut okp) in cells.iter_mut() {
+        if let Some(a) = ui.tree_node(format!("Entity {:?}", entity)) {
+          ui.slider("X", -1.0, 1.0, &mut transform.x);
+          ui.slider("Y", -1.0, 1.0, &mut transform.y);
+          if let Some(okp) = okp.0 {
+            ui.button(format!("{}", system_storage.get(&okp).unwrap()));
+          } else {
+            ui.button("---");
+          }
+          if let Some(drop) = ui.drag_drop_target() {
+            if let Some(Ok(p)) = drop.accept_payload::<SystemId, _>("SYSTEM", DragDropFlags::empty()) {
+              *okp = OnKeyPress(Some(p.data));
+            }
+          }
+        }
+
+        // igFold
+      }
+    });
+}
 
 pub fn editor_ui(
   // mut game_viewport: ResMut<GameViewport>,
@@ -14,7 +66,6 @@ pub fn editor_ui(
   // mut ui: NonSendMut<*mut Ui>,
   // surface: Res<ASingleton<Surface>>,
 ) {
-  return;
   let ui = imgui.current_frame();
   // unsafe { igSetCurrentContext(ctx.cast()) } ;
 
@@ -24,9 +75,6 @@ pub fn editor_ui(
 
   // return;
   // let ui : &mut Ui = unsafe { &mut*ui.cast() };
-  {
-    ui.dockspace_over_main_viewport();
-  }
   ui.show_demo_window(&mut true);
 
   let t = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));

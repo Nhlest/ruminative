@@ -5,7 +5,7 @@ use std::sync::Arc;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
-use vulkano::image::{Image, ImageUsage};
+use vulkano::image::{Image, ImageFormatInfo, ImageType, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::graphics::viewport::Viewport;
@@ -97,8 +97,10 @@ impl RuminativeInternals {
     let surface_capabilities = device
       .physical_device()
       .surface_capabilities(&surface, Default::default())?;
-    // let image_format = device.physical_device().surface_formats(&surface, Default::default())?[0].0;
-    let image_format = Format::B8G8R8A8_UNORM;
+    let image_format = *device.physical_device().surface_formats(&surface, Default::default())?.iter().map(|(format, _)| {
+      let s : u8 = format.components().into_iter().take(3).sum();
+      (format, if s == 8*3 { 2 } else if s > 8*3 { 1 } else { 0 })
+    }).max_by(|a, b| a.1.cmp(&b.1)).unwrap().0;
     let window = surface
       .object()
       .ok_or("No object")?

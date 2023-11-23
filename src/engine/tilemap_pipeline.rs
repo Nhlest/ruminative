@@ -1,10 +1,11 @@
 use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, ANamedSingleton};
-use bevy_app::{App, Plugin};
+use bevy_app::{App, Plugin, PreUpdate};
 use bevy_ecs::prelude::*;
 use smallvec::smallvec;
 use std::error::Error;
 use std::io::Cursor;
 use std::sync::Arc;
+use bevy_ecs::system::SystemId;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
@@ -29,9 +30,21 @@ use vulkano::pipeline::{
   DynamicState, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout, PipelineShaderStageCreateInfo,
 };
 use vulkano::shader::EntryPoint;
-use vulkano::swapchain::Swapchain;
+use vulkano::swapchain::{Surface, Swapchain};
 use vulkano::DeviceSize;
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
+
+#[derive(Component)]
+pub struct OnKeyPress(pub Option<SystemId>);
+
+#[derive(Component)]
+pub struct Cell;
+
+#[derive(Component)]
+pub struct Transform {
+  pub x: f32,
+  pub y: f32,
+}
 
 pub struct TilemapPipeline;
 
@@ -102,7 +115,7 @@ impl TilemapPipeline {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: Arc<GraphicsPipeline>,
-    memory_allocator: Arc<StandardMemoryAllocator>,
+    memory_allocator: Arc<StandardMemoryAllocator>
   ) -> Result<Arc<PersistentDescriptorSet>, Box<dyn Error>> {
     let descriptor_set_allocator =
       StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
@@ -136,7 +149,6 @@ impl TilemapPipeline {
       )?;
 
       reader.next_frame(&mut upload_buffer.write().unwrap()).unwrap();
-
       let image = Image::new(
         memory_allocator,
         ImageCreateInfo {
@@ -226,14 +238,14 @@ impl TilemapPipeline {
     Ok(pipeline)
   }
 
-  fn texture(memory_allocator: Arc<StandardMemoryAllocator>, device: Arc<Device>, pipeline: Arc<GraphicsPipeline>) -> Resultat<(Arc<ImageView>, Arc<PersistentDescriptorSet>)> {
+  fn texture(memory_allocator: Arc<StandardMemoryAllocator>, device: Arc<Device>, pipeline: Arc<GraphicsPipeline>, swapchain: Arc<Swapchain>) -> Resultat<(Arc<ImageView>, Arc<PersistentDescriptorSet>)> {
     let descriptor_set_allocator =
       StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
     let image = Image::new(
       memory_allocator,
       ImageCreateInfo {
         usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::SAMPLED,
-        format: Format::R8G8B8A8_UNORM,
+        format: swapchain.image_format(),
         image_type: ImageType::Dim2d,
         extent: [800, 600, 1],
         ..Default::default()
@@ -276,13 +288,43 @@ impl TilemapPipeline {
     let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
     let descriptor_set = Self::sampler(device.clon(), queue.clon(), pipeline.clone(), memory_allocator.clone())?;
     let vertex_buffer = Self::vertex_buffer(memory_allocator.clone())?;
-    let (image_view, set) = Self::texture(memory_allocator, device.clon(), pipeline.clone())?;
+    let (image_view, set) = Self::texture(memory_allocator, device.clon(), pipeline.clone(), swapchain.clon())?;
 
     app.insert_resource(ASingleton(image_view));
     app.insert_resource(ANamedSingleton::<"X", _>(set));
     app.insert_resource(AssociatedResource::<Self, _>::new(pipeline));
     app.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
     app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
+    Ok(())
+  }
+
+  fn regenerate_vertex_buffer(
+    mut commands: Commands,
+    memory_allocator: Res<ASingleton<StandardMemoryAllocator>>,
+    cells: Query<&Transform, With<Cell>>
+  ) -> Resultat<()> {
+    let verticies = cells.iter().map(|t| {
+      MVertex {
+        in_coord: [t.x, t.y],
+        tile: 11,
+      }
+    });
+    if verticies.len() == 0 {
+      return Ok(());
+    }
+    let vertex_buffer = Buffer::from_iter(
+      memory_allocator.clon(),
+      BufferCreateInfo {
+        usage: BufferUsage::VERTEX_BUFFER,
+        ..Default::default()
+      },
+      AllocationCreateInfo {
+        memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
+        ..Default::default()
+      },
+      verticies,
+    )?;
+    commands.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
     Ok(())
   }
 
@@ -325,7 +367,9 @@ impl TilemapPipeline {
 impl Plugin for TilemapPipeline {
   fn build(&self, app: &mut App) {
     TilemapPipeline::init(app).unwrap();
-    let system_id = app.world.register_system(TilemapPipeline::bind.pipe(handle_result));
-    app.world.resource_mut::<PipelineRunner>().order.push(system_id);
+    let s = app.world.register_system(TilemapPipeline::bind.pipe(handle_result)); app.world.resource_mut::<PipelineRunner>().order.push(s);
+    app.add_systems(PreUpdate, TilemapPipeline::regenerate_vertex_buffer.pipe(handle_result));
+    app.world.spawn((Cell, Transform { x: 0.5, y: 0.5 }, OnKeyPress(None)));
+    app.world.spawn((Cell, Transform { x: 0.3, y: 0.2 }, OnKeyPress(None)));
   }
 }

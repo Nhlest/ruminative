@@ -459,11 +459,7 @@ impl ImguiPipeline {
       vec![],
     ));
     let ui = imgui.new_frame() as *mut Ui;
-    let ctx = unsafe { igGetCurrentContext() };
-    app.world.insert_non_send_resource(ui);
-    println!("!");
     app.insert_non_send_resource(imgui);
-    app.insert_non_send_resource(ctx);
     Ok(())
   }
 }

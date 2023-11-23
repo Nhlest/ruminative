@@ -77,3 +77,6 @@ pub struct GameViewport {
   pub pos: [f32; 2],
   pub size: [f32; 2]
 }
+
+#[derive(Event)]
+pub struct KeyPressed;

@@ -2,7 +2,7 @@ use crate::engine::imgui_pipeline::ImguiPipeline;
 use crate::engine::internals::RuminativeInternals;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
 use crate::engine::tilemap_pipeline::TilemapPipeline;
-use crate::engine::{ANamedSingleton, ASingleton, GameViewport, PipelineRunner, Singleton, WinitEvent};
+use crate::engine::{ANamedSingleton, ASingleton, GameViewport, KeyPressed, PipelineRunner, Singleton, WinitEvent};
 use bevy_app::{App, AppExit, Plugin};
 use std::error::Error;
 use std::mem::{ManuallyDrop, MaybeUninit};
@@ -25,6 +25,7 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
 use crate::engine::barrier_pipeline::BarrierPipeline;
+use crate::systems::SystemStorage;
 
 fn window_size_dependent_setup(images: &[Arc<Image>], viewport: &mut Viewport) -> Vec<Arc<ImageView>> {
   let dimensions = images[0].extent();
@@ -46,7 +47,10 @@ impl Plugin for RuminativeEnginePlugin {
 
     RuminativeInternals::new_in_app(&event_loop, app).unwrap();
 
+    app.add_event::<KeyPressed>();
+
     app.init_resource::<GameViewport>();
+    app.init_resource::<SystemStorage>();
 
     app.add_plugins(TilemapPipeline);
     app.add_plugins(RumiguiPipeline);
@@ -85,6 +89,12 @@ impl Plugin for RuminativeEnginePlugin {
             ..
           } => {
             recreate_swapchain = true;
+          }
+          Event::WindowEvent {
+            event: WindowEvent::KeyboardInput { .. },
+            ..
+          } => {
+            app.world.send_event(KeyPressed);
           }
           Event::RedrawEventsCleared => {
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
@@ -145,6 +155,10 @@ impl Plugin for RuminativeEnginePlugin {
             let mut imgui = app.world.non_send_resource_mut::<Context>();
             let ctx = unsafe { igGetCurrentContext() };
             let ui = imgui.new_frame();
+
+            {
+              ui.dockspace_over_main_viewport();
+            }
 
             // app.world.insert_non_send_resource(ui);
             // app.world.insert_non_send_resource(ctx);
