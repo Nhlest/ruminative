@@ -2,32 +2,30 @@ use crate::engine::imgui_pipeline::ImguiPipeline;
 use crate::engine::internals::RuminativeInternals;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
 use crate::engine::tilemap_pipeline::TilemapPipeline;
-use crate::engine::{ANamedSingleton, ASingleton, AssociatedResource, GameViewport, PipelineRunner, Singleton, WinitEvent};
-use bevy_app::App;
-use smallvec::smallvec;
+use crate::engine::{ANamedSingleton, ASingleton, GameViewport, PipelineRunner, Singleton, WinitEvent};
+use bevy_app::{App, AppExit, Plugin};
 use std::error::Error;
+use std::mem::{ManuallyDrop, MaybeUninit};
 use std::sync::Arc;
+use bevy_ecs::system::RunSystemOnce;
+use imgui::{Context, Ui};
+use imgui_sys::igGetCurrentContext;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
-  AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderingAttachmentInfo, RenderingInfo,
+  AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer
 };
 use vulkano::device::{Device, Queue};
-use vulkano::image::view::{ImageView, ImageViewCreateInfo};
+use vulkano::image::view::{ImageView};
 use vulkano::image::Image;
 use vulkano::pipeline::graphics::viewport::Viewport;
-use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use vulkano::swapchain::{acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, Validated, VulkanError};
-use vulkano::pipeline::PipelineBindPoint;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
 use crate::engine::barrier_pipeline::BarrierPipeline;
 
-pub struct Ruminative {
-  pub app: App,
-}
 fn window_size_dependent_setup(images: &[Arc<Image>], viewport: &mut Viewport) -> Vec<Arc<ImageView>> {
   let dimensions = images[0].extent();
   viewport.extent = [dimensions[0] as f32, dimensions[1] as f32];
@@ -38,15 +36,15 @@ fn window_size_dependent_setup(images: &[Arc<Image>], viewport: &mut Viewport) -
     .collect::<Vec<_>>()
 }
 
-impl Ruminative {
-  pub fn new() -> Result<Self, Box<dyn Error>> {
-    let mut app = App::new();
+pub struct RuminativeEnginePlugin;
 
+impl Plugin for RuminativeEnginePlugin {
+  fn build(&self, app: &mut App) {
     app.add_event::<WinitEvent>();
 
     let event_loop = EventLoop::new();
 
-    RuminativeInternals::new_in_app(&event_loop, &mut app)?;
+    RuminativeInternals::new_in_app(&event_loop, app).unwrap();
 
     app.init_resource::<GameViewport>();
 
@@ -133,20 +131,28 @@ impl Ruminative {
             if suboptimal {
               recreate_swapchain = true;
             }
-            let mut builder = AutoCommandBufferBuilder::primary(
+            let builder = AutoCommandBufferBuilder::primary(
               &command_buffer_allocator,
               queue.queue_family_index(),
               CommandBufferUsage::OneTimeSubmit,
             )
-            .unwrap();
-            let viewport = app.world.resource::<Singleton<Viewport>>();
+              .unwrap();
 
             app.world.insert_resource(ANamedSingleton::<"Output", _>(images[image_index as usize].clone()));
 
             app.insert_non_send_resource(builder);
+
+            let mut imgui = app.world.non_send_resource_mut::<Context>();
+            let ctx = unsafe { igGetCurrentContext() };
+            let ui = imgui.new_frame();
+
+            // app.world.insert_non_send_resource(ui);
+            // app.world.insert_non_send_resource(ctx);
+
             app.update();
             for i in app.world.resource::<PipelineRunner>().order.clone() {
               app.world.run_system(i).unwrap();
+              // app.world.run_system(i).unwrap();
             }
 
             let mut builder = app
@@ -190,7 +196,5 @@ impl Ruminative {
         }
       })
     });
-
-    Ok(Self { app })
   }
 }

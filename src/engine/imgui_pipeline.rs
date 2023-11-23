@@ -1,13 +1,14 @@
 use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent, Singleton, ANamedSingleton};
-use bevy_app::{App, Plugin, PreUpdate, Update};
+use bevy_app::{App, Plugin, PostUpdate, PreUpdate};
 use bevy_ecs::prelude::*;
-use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key};
+use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key, Ui};
 use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::ffi::CString;
+use std::mem::ManuallyDrop;
 use std::slice;
 use std::sync::Arc;
+use imgui_sys::{igGetCurrentContext};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
@@ -457,7 +458,12 @@ impl ImguiPipeline {
     app.insert_resource(AssociatedResource::<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>::new(
       vec![],
     ));
+    let ui = imgui.new_frame() as *mut Ui;
+    let ctx = unsafe { igGetCurrentContext() };
+    app.world.insert_non_send_resource(ui);
+    println!("!");
     app.insert_non_send_resource(imgui);
+    app.insert_non_send_resource(ctx);
     Ok(())
   }
 }
@@ -541,7 +547,6 @@ impl ImguiPipeline {
     vertex_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
     draw_commands: Res<AssociatedResource<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>>,
     viewport: Res<Singleton<Viewport>>,
-    texture: Res<ASingleton<ImageView>>,
     texture_set: Res<ANamedSingleton<"X", PersistentDescriptorSet>>,
     framebuffer: Res<ANamedSingleton<"Output", ImageView>>
   ) -> Resultat<()> {
@@ -640,7 +645,7 @@ impl Plugin for ImguiPipeline {
   fn build(&self, app: &mut App) {
     ImguiPipeline::init(app).unwrap();
     app.add_systems(PreUpdate, ImguiPipeline::handle_event);
-    app.add_systems(Update, ImguiPipeline::update);
+    app.add_systems(PostUpdate, ImguiPipeline::update);
 
     let system_id = app.world.register_system(ImguiPipeline::bind.pipe(handle_result));
     app.world.resource_mut::<PipelineRunner>().order.push(system_id);

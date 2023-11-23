@@ -1,4 +1,4 @@
-use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, GameViewport, Singleton, ANamedSingleton};
+use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, ANamedSingleton};
 use bevy_app::{App, Plugin};
 use bevy_ecs::prelude::*;
 use smallvec::smallvec;
@@ -7,11 +7,11 @@ use std::io::Cursor;
 use std::sync::Arc;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, ClearAttachment, ClearColorImageInfo, ClearRect, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
-use vulkano::format::{ClearColorValue, Format};
+use vulkano::format::{Format};
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageCreateInfo, ImageType, ImageUsage};
@@ -292,7 +292,6 @@ impl TilemapPipeline {
     descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
     vertex_buffer: Res<AssociatedResource<Self, Subbuffer<[MVertex]>>>,
     // game_viewport: Res<GameViewport>,
-    viewport: Res<Singleton<Viewport>>,
     image_view: Res<ASingleton<ImageView>>
   ) -> Resultat<()> {
     builder
