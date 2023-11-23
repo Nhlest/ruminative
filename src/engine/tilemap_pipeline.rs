@@ -141,7 +141,7 @@ impl TilemapPipeline {
         memory_allocator,
         ImageCreateInfo {
           usage: ImageUsage::TRANSFER_DST | ImageUsage::SAMPLED,
-          format: Format::R8G8B8A8_SRGB,
+          format: Format::B8G8R8A8_UNORM,
           image_type: ImageType::Dim2d,
           extent: dimensions,
           ..Default::default()

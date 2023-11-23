@@ -98,7 +98,7 @@ impl RuminativeInternals {
       .physical_device()
       .surface_capabilities(&surface, Default::default())?;
     // let image_format = device.physical_device().surface_formats(&surface, Default::default())?[0].0;
-    let image_format = Format::R8G8B8A8_UNORM;
+    let image_format = Format::B8G8R8A8_UNORM;
     let window = surface
       .object()
       .ok_or("No object")?
