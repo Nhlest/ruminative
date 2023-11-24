@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 use std::error::Error;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use winit::event::Event;
+use winit::event::{Event, VirtualKeyCode};
 
 pub mod imgui_pipeline;
 pub mod rumigui_pipeline;
@@ -79,4 +79,4 @@ pub struct GameViewport {
 }
 
 #[derive(Event)]
-pub struct KeyPressed;
+pub struct KeyPressed(pub VirtualKeyCode);

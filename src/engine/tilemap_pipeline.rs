@@ -33,9 +33,10 @@ use vulkano::shader::EntryPoint;
 use vulkano::swapchain::{Surface, Swapchain};
 use vulkano::DeviceSize;
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
+use crate::systems::MySystemId;
 
 #[derive(Component)]
-pub struct OnKeyPress(pub Option<SystemId>);
+pub struct OnKeyPress(pub Option<MySystemId>);
 
 #[derive(Component)]
 pub struct Cell;

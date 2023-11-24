@@ -1,4 +1,4 @@
-use crate::systems::SystemStorage;
+use crate::systems::{MySystemId, SystemStorage};
 use std::mem::ManuallyDrop;
 use bevy_ecs::prelude::*;
 use bevy_app::prelude::*;
@@ -8,6 +8,7 @@ use imgui_sys::ImGuiContext;
 use vulkano::swapchain::Surface;
 use crate::engine::ASingleton;
 use crate::engine::tilemap_pipeline::{Cell, OnKeyPress, Transform};
+use crate::systems::CommandsExtension;
 
 pub fn systems_ui(
   mut commands: Commands,
@@ -19,7 +20,7 @@ pub fn systems_ui(
     .build(|| {
       for (system_id, system_name) in systems.s.iter_mut() {
         if ui.button(format!("System {}", system_name)) {
-          commands.run_system(*system_id);
+          commands.my_run_system(*system_id, 5);
         }
         let drag_source = ui.drag_drop_source_config("SYSTEM");
         if let Some(d) = drag_source.begin_payload(*system_id) {
@@ -41,13 +42,18 @@ pub fn inspector_ui(
         if let Some(a) = ui.tree_node(format!("Entity {:?}", entity)) {
           ui.slider("X", -1.0, 1.0, &mut transform.x);
           ui.slider("Y", -1.0, 1.0, &mut transform.y);
-          if let Some(okp) = okp.0 {
-            ui.button(format!("{}", system_storage.get(&okp).unwrap()));
+          ui.separator();
+          ui.text("OnKeyPress");
+          ui.same_line();
+          if let Some(okp_id) = okp.0 {
+            if ui.button(format!("{}", system_storage.get(&okp_id).unwrap())) {
+              *okp = OnKeyPress(None);
+            }
           } else {
             ui.button("---");
           }
           if let Some(drop) = ui.drag_drop_target() {
-            if let Some(Ok(p)) = drop.accept_payload::<SystemId, _>("SYSTEM", DragDropFlags::empty()) {
+            if let Some(Ok(p)) = drop.accept_payload::<MySystemId, _>("SYSTEM", DragDropFlags::empty()) {
               *okp = OnKeyPress(Some(p.data));
             }
           }

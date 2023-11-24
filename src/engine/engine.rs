@@ -91,10 +91,12 @@ impl Plugin for RuminativeEnginePlugin {
             recreate_swapchain = true;
           }
           Event::WindowEvent {
-            event: WindowEvent::KeyboardInput { .. },
+            event: WindowEvent::KeyboardInput { input, .. },
             ..
           } => {
-            app.world.send_event(KeyPressed);
+            if let Some(kc) = input.virtual_keycode {
+              app.world.send_event(KeyPressed(kc));
+            }
           }
           Event::RedrawEventsCleared => {
             let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
