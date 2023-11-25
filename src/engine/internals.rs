@@ -2,6 +2,9 @@ use crate::engine::{ASingleton, PipelineRunner, Singleton};
 use bevy_app::App;
 use std::error::Error;
 use std::sync::Arc;
+use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
+use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
+use vulkano::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
 use vulkano::format::Format;
@@ -131,7 +134,18 @@ impl RuminativeInternals {
     let (swapchain, images) = Self::swapchain_and_images(device.clone(), surface.clone())?;
 
     world.init_resource::<PipelineRunner>();
+    // descriptor_set_layout: Res<ANamedSingleton<"Sampler", DescriptorSetLayout>>,
+    // descriptor_set_allocator: Res<ASingleton<StandardDescriptorSetAllocator>>,
+    // command_buffer_allocator: Res<ASingleton<StandardCommandBufferAllocator>>,
 
+    // let descriptor_set_layout = PersistentDescriptorSet::new();
+
+    let descriptor_set_allocator =
+      StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
+    let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
+
+    world.insert_resource(ASingleton(Arc::new(descriptor_set_allocator)));
+    world.insert_resource(ASingleton(Arc::new(command_buffer_allocator)));
     world.insert_resource(ASingleton(device));
     world.insert_resource(ASingleton(surface));
     world.insert_resource(ASingleton(queue));

@@ -42,6 +42,7 @@ use winit::event::{
   WindowEvent,
 };
 use winit::window::Window;
+use crate::assets::Asset;
 
 fn to_imgui_mouse_button(button: MouseButton) -> Option<imgui::MouseButton> {
   match button {
@@ -308,10 +309,9 @@ impl ImguiPipeline {
     pipeline: Arc<GraphicsPipeline>,
     memory_allocator: Arc<StandardMemoryAllocator>,
     tex: FontAtlasTexture,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
   ) -> Result<(Arc<PersistentDescriptorSet>, Option<Box<dyn GpuFuture>>), Box<dyn Error>> {
-    let descriptor_set_allocator =
-      StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
-    let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
     let mut uploads = AutoCommandBufferBuilder::primary(
       &command_buffer_allocator,
       queue.queue_family_index(),
@@ -426,6 +426,9 @@ impl ImguiPipeline {
     let device = app.world.resource::<ASingleton<Device>>();
     let swapchain = app.world.resource::<ASingleton<Swapchain>>();
     let queue = app.world.resource::<ASingleton<Queue>>();
+    let descriptor_set_allocator = app.world.resource::<ASingleton<StandardDescriptorSetAllocator>>();
+    let command_buffer_allocator = app.world.resource::<ASingleton<StandardCommandBufferAllocator>>();
+
     let (vs, fs) = Self::shaders(device.clon())?;
     let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
 
@@ -439,6 +442,8 @@ impl ImguiPipeline {
       pipeline.clone(),
       memory_allocator.clon(),
       tex,
+      command_buffer_allocator.clon(),
+      descriptor_set_allocator.clon()
     )?;
 
     let io = imgui.io_mut();
@@ -458,7 +463,10 @@ impl ImguiPipeline {
     app.insert_resource(AssociatedResource::<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>::new(
       vec![],
     ));
-    let ui = imgui.new_frame() as *mut Ui;
+    let ui = imgui.new_frame();
+    {
+      ui.dockspace_over_main_viewport();
+    }
     app.insert_non_send_resource(imgui);
     Ok(())
   }
@@ -544,7 +552,8 @@ impl ImguiPipeline {
     draw_commands: Res<AssociatedResource<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>>,
     viewport: Res<Singleton<Viewport>>,
     texture_set: Res<ANamedSingleton<"X", PersistentDescriptorSet>>,
-    framebuffer: Res<ANamedSingleton<"Output", ImageView>>
+    framebuffer: Res<ANamedSingleton<"Output", ImageView>>,
+    sets: Query<&Asset<Image>>
   ) -> Resultat<()> {
     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
     builder
@@ -561,7 +570,16 @@ impl ImguiPipeline {
       .set_viewport(0, smallvec![viewport.0.clone()])
       .unwrap();
     for (texture, buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
-      if *texture == 1 {
+      if *texture > 1 {
+        let descriptor_set = sets.get(Entity::from_bits(*texture as u64)).unwrap().data.clone();
+        builder.bind_pipeline_graphics(pipeline.clone())?
+          .bind_descriptor_sets(
+            PipelineBindPoint::Graphics,
+            pipeline.layout().clone(),
+            0,
+            descriptor_set,
+          )?;
+      } else if *texture == 1 {
         builder.bind_pipeline_graphics(pipeline.clone())?
           .bind_descriptor_sets(
             PipelineBindPoint::Graphics,

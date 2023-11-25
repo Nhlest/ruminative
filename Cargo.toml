@@ -22,7 +22,9 @@ vulkano = "0.34.*"
 imgui = { features = ["docking"], git = "https://github.com/Nhlest/imgui-rs", branch = "main" }
 imgui-sys = { features = ["docking"], git = "https://github.com/Nhlest/imgui-rs", branch = "main" }
 winit = "0.28.*"
+itertools = "0.12.*"
 png = "0.17.*"
+rfd = "0.12.*"
 
 [profile.release]
 strip = true

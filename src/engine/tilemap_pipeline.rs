@@ -6,11 +6,13 @@ use std::error::Error;
 use std::io::Cursor;
 use std::sync::Arc;
 use bevy_ecs::system::SystemId;
+use itertools::Itertools;
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
+use vulkano::descriptor_set::layout::DescriptorSetLayout;
 use vulkano::device::{Device, Queue};
 use vulkano::format::{Format};
 use vulkano::image::sampler::{Filter, Sampler, SamplerAddressMode, SamplerCreateInfo};
@@ -33,7 +35,27 @@ use vulkano::shader::EntryPoint;
 use vulkano::swapchain::{Surface, Swapchain};
 use vulkano::DeviceSize;
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
+use crate::assets::Asset;
 use crate::systems::MySystemId;
+
+pub type TileCoord = (u16, u16);
+
+pub struct SpriteAtlas {
+  pub image_asset: Entity,
+  pub size_x: u16,
+  pub size_y: u16
+}
+
+#[derive(Resource)]
+pub struct TileDrawCommands {
+  pub vec: Vec<(Entity, Subbuffer<[MVertex]>)>
+}
+
+#[derive(Component)]
+pub struct Tile {
+  pub tile_sheet_entity: Entity,
+  pub coord: TileCoord
+}
 
 #[derive(Component)]
 pub struct OnKeyPress(pub Option<MySystemId>);
@@ -54,8 +76,8 @@ pub struct TilemapPipeline;
 pub struct MVertex {
   #[format(R32G32_SFLOAT)]
   in_coord: [f32; 2],
-  #[format(R32_UINT)]
-  tile: u32,
+  #[format(R16G16_UINT)]
+  tile: [u16; 2],
 }
 
 mod vs {
@@ -86,15 +108,15 @@ impl TilemapPipeline {
     let vertices = [
       MVertex {
         in_coord: [0.0, -0.1],
-        tile: 1,
+        tile: [11, 0],
       },
       MVertex {
         in_coord: [0.0, -0.3],
-        tile: 2,
+        tile: [11, 0],
       },
       MVertex {
         in_coord: [0.3, -0.4],
-        tile: 3,
+        tile: [11, 0],
       },
     ];
     let vertex_buffer = Buffer::from_iter(
@@ -116,12 +138,10 @@ impl TilemapPipeline {
     device: Arc<Device>,
     queue: Arc<Queue>,
     pipeline: Arc<GraphicsPipeline>,
-    memory_allocator: Arc<StandardMemoryAllocator>
-  ) -> Result<Arc<PersistentDescriptorSet>, Box<dyn Error>> {
-    let descriptor_set_allocator =
-      StandardDescriptorSetAllocator::new(device.clone(), StandardDescriptorSetAllocatorCreateInfo::default());
-    let command_buffer_allocator = StandardCommandBufferAllocator::new(device.clone(), Default::default());
-
+    memory_allocator: Arc<StandardMemoryAllocator>,
+    command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
+    descriptor_set_allocator: Arc<StandardDescriptorSetAllocator>,
+  ) -> Result<(Arc<DescriptorSetLayout>, Arc<PersistentDescriptorSet>), Box<dyn Error>> {
     let mut uploads = AutoCommandBufferBuilder::primary(
       &command_buffer_allocator,
       queue.queue_family_index(),
@@ -179,7 +199,7 @@ impl TilemapPipeline {
       },
     )?;
 
-    let layout = pipeline.layout().set_layouts().get(0).unwrap();
+    let layout = pipeline.layout().set_layouts().get(0).unwrap().clone();
     let set = PersistentDescriptorSet::new(
       &descriptor_set_allocator,
       layout.clone(),
@@ -189,7 +209,7 @@ impl TilemapPipeline {
 
     let _future = uploads.build()?.execute(queue)?;
 
-    Ok(set)
+    Ok((layout, set))
   }
 
   fn pipeline(
@@ -284,15 +304,19 @@ impl TilemapPipeline {
     let device = app.world.resource::<ASingleton<Device>>();
     let swapchain = app.world.resource::<ASingleton<Swapchain>>();
     let queue = app.world.resource::<ASingleton<Queue>>();
+    let descriptor_set_allocator = app.world.resource::<ASingleton<StandardDescriptorSetAllocator>>();
+    let command_buffer_allocator = app.world.resource::<ASingleton<StandardCommandBufferAllocator>>();
+
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clon()));
     let (vs, fs) = Self::shaders(device.clon())?;
     let pipeline = Self::pipeline(device.clon(), swapchain.clon(), vs, fs)?;
-    let descriptor_set = Self::sampler(device.clon(), queue.clon(), pipeline.clone(), memory_allocator.clone())?;
+    let (descriptor_set_layout, descriptor_set) = Self::sampler(device.clon(), queue.clon(), pipeline.clone(), memory_allocator.clone(), command_buffer_allocator.clon(), descriptor_set_allocator.clon())?;
     let vertex_buffer = Self::vertex_buffer(memory_allocator.clone())?;
     let (image_view, set) = Self::texture(memory_allocator, device.clon(), pipeline.clone(), swapchain.clon())?;
 
     app.insert_resource(ASingleton(image_view));
     app.insert_resource(ANamedSingleton::<"X", _>(set));
+    app.insert_resource(ANamedSingleton::<"Sampler", _>(descriptor_set_layout));
     app.insert_resource(AssociatedResource::<Self, _>::new(pipeline));
     app.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
     app.insert_resource(AssociatedResource::<Self, _>::new(descriptor_set));
@@ -302,30 +326,40 @@ impl TilemapPipeline {
   fn regenerate_vertex_buffer(
     mut commands: Commands,
     memory_allocator: Res<ASingleton<StandardMemoryAllocator>>,
-    cells: Query<&Transform, With<Cell>>
+    cells: Query<(&Transform, &Tile), With<Cell>>,
   ) -> Resultat<()> {
-    let verticies = cells.iter().map(|t| {
-      MVertex {
-        in_coord: [t.x, t.y],
-        tile: 11,
-      }
+    let mut draw_commands = vec![];
+    cells
+      .iter()
+      .sorted_by(|a, b| a.1.tile_sheet_entity.cmp(&b.1.tile_sheet_entity))
+      .group_by(|a| a.1.tile_sheet_entity)
+      .into_iter()
+      .map(|(entity, group)| {
+        let vert = group.map(|(transform, tile)|
+          MVertex {
+            in_coord: [transform.x, transform.y],
+            tile: [tile.coord.0, tile.coord.1]
+          }).collect::<Vec<_>>();
+        Buffer::from_iter(
+          memory_allocator.clon(),
+          BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+          },
+          AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+          },
+          vert,
+        ).ok().map(|b| (entity, b))
+      }).filter_map(|x|x).for_each(|(entity, buffer)| {
+        draw_commands.push((entity, buffer))
     });
-    if verticies.len() == 0 {
-      return Ok(());
-    }
-    let vertex_buffer = Buffer::from_iter(
-      memory_allocator.clon(),
-      BufferCreateInfo {
-        usage: BufferUsage::VERTEX_BUFFER,
-        ..Default::default()
-      },
-      AllocationCreateInfo {
-        memory_type_filter: MemoryTypeFilter::HOST_RANDOM_ACCESS,
-        ..Default::default()
-      },
-      verticies,
-    )?;
-    commands.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
+    // if verticies.len() == 0 {
+    //   return Ok(());
+    // }
+    // commands.insert_resource(AssociatedResource::<Self, _>::new(vertex_buffer));
+    commands.insert_resource(TileDrawCommands { vec: draw_commands });
     Ok(())
   }
 
@@ -333,11 +367,13 @@ impl TilemapPipeline {
     mut builder: NonSendMut<AutoCommandBufferBuilder<PrimaryAutoCommandBuffer>>,
     pipeline: Res<AssociatedResource<Self, Arc<GraphicsPipeline>>>,
     descriptor_set: Res<AssociatedResource<Self, Arc<PersistentDescriptorSet>>>,
-    vertex_buffer: Res<AssociatedResource<Self, Subbuffer<[MVertex]>>>,
+    tile_draw_commands: Res<TileDrawCommands>,
     // game_viewport: Res<GameViewport>,
-    image_view: Res<ASingleton<ImageView>>
+    image_view: Res<ASingleton<ImageView>>,
+    query: Query<&Asset<Image>>,
+    sprite_atlases: Query<&Asset<SpriteAtlas>>
   ) -> Resultat<()> {
-    builder
+    let builder = builder
       .begin_rendering(RenderingInfo {
         color_attachments: vec![Some(RenderingAttachmentInfo {
           load_op: AttachmentLoadOp::Clear,
@@ -347,20 +383,25 @@ impl TilemapPipeline {
         })],
         ..Default::default()
       })?
-      .bind_pipeline_graphics(pipeline.clone())?
+      .bind_pipeline_graphics(pipeline.clone())?;
       // .clear_attachments(smallvec![ClearAttachment::Color {clear_value: ClearColorValue::Float([0.1, 0.0, 0.0, 1.0]), color_attachment: 0}], smallvec![ClearRect { offset: [game_viewport.pos[0] as u32, game_viewport.pos[1] as u32], extent: [game_viewport.size[0] as u32, game_viewport.size[1] as u32], array_layers: 0..1 }])?
-      .bind_descriptor_sets(
-        PipelineBindPoint::Graphics,
-        pipeline.layout().clone(),
-        0,
-        descriptor_set.clone(),
-      )?
-      .bind_vertex_buffers(0, vertex_buffer.clone())?
-      .push_constants(pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1] })?
-      // .set_viewport(0, smallvec![Viewport { offset: game_viewport.pos, extent: game_viewport.size, depth_range: 0.0..=1.0 }])?
-      // .set_viewport(0, smallvec![viewport.0.clone()])?
-      .set_viewport(0, smallvec![Viewport { offset: [0.0, 0.0], extent: [800.0, 600.0], depth_range: 0.0..=1.0 }])?
-      .draw(4, vertex_buffer.len() as u32, 0, 0)?;
+    for (entity, buffer) in &tile_draw_commands.vec {
+      let sprite_atlas = &sprite_atlases.get(*entity).unwrap().data;
+      let descriptor_set = query.get(sprite_atlas.image_asset)?.data.clone();
+      builder
+        .bind_descriptor_sets(
+          PipelineBindPoint::Graphics,
+          pipeline.layout().clone(),
+          0,
+          descriptor_set.clone(),
+        )?
+        .bind_vertex_buffers(0, buffer.clone())?
+        .push_constants(pipeline.layout().clone(), 0, vs::Constants { offset: [0.2, 0.1], tile_size_x: sprite_atlas.size_x as u32, tile_size_y: sprite_atlas.size_y as u32 })?
+        // .set_viewport(0, smallvec![Viewport { offset: game_viewport.pos, extent: game_viewport.size, depth_range: 0.0..=1.0 }])?
+        // .set_viewport(0, smallvec![viewport.0.clone()])?
+        .set_viewport(0, smallvec![Viewport { offset: [0.0, 0.0], extent: [800.0, 600.0], depth_range: 0.0..=1.0 }])?
+        .draw(4, buffer.len() as u32, 0, 0)?;
+    }
     Ok(())
   }
 }
@@ -370,7 +411,7 @@ impl Plugin for TilemapPipeline {
     TilemapPipeline::init(app).unwrap();
     let s = app.world.register_system(TilemapPipeline::bind.pipe(handle_result)); app.world.resource_mut::<PipelineRunner>().order.push(s);
     app.add_systems(PreUpdate, TilemapPipeline::regenerate_vertex_buffer.pipe(handle_result));
-    app.world.spawn((Cell, Transform { x: 0.5, y: 0.5 }, OnKeyPress(None)));
-    app.world.spawn((Cell, Transform { x: 0.3, y: 0.2 }, OnKeyPress(None)));
+    // app.world.spawn((Cell, Transform { x: 0.5, y: 0.5 }, OnKeyPress(None)));
+    // app.world.spawn((Cell, Transform { x: 0.3, y: 0.2 }, OnKeyPress(None)));
   }
 }
