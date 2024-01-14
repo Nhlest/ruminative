@@ -4,26 +4,23 @@ use std::error::Error;
 use std::sync::Arc;
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
-use vulkano::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::physical::PhysicalDeviceType;
 use vulkano::device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags};
-use vulkano::format::Format;
-use vulkano::image::{Image, ImageFormatInfo, ImageType, ImageUsage};
+use vulkano::image::{Image, ImageUsage};
 use vulkano::instance::{Instance, InstanceCreateInfo};
 use vulkano::memory::allocator::StandardMemoryAllocator;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::swapchain::{PresentMode, Surface, Swapchain, SwapchainCreateInfo};
 use vulkano::VulkanLibrary;
-use vulkano_win::required_extensions;
 use winit::event_loop::EventLoop;
 use winit::window::{Window, WindowBuilder};
 
 pub struct RuminativeInternals;
 
 impl RuminativeInternals {
-  fn instance() -> Result<Arc<Instance>, Box<dyn Error>> {
+  fn instance(event_loop: &EventLoop<()>) -> Result<Arc<Instance>, Box<dyn Error>> {
     let library = VulkanLibrary::new()?;
-    let required_extensions = required_extensions(&library);
+    let required_extensions = Surface::required_extensions(event_loop);
 
     let instance = Instance::new(
       library,
@@ -128,7 +125,7 @@ impl RuminativeInternals {
     )?)
   }
   pub fn new_in_app(event_loop: &EventLoop<()>, world: &mut App) -> Result<(), Box<dyn Error>> {
-    let instance = Self::instance()?;
+    let instance = Self::instance(event_loop)?;
     let (device, surface, queue) = Self::device_surface_and_queue(&event_loop, instance)?;
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
     let (swapchain, images) = Self::swapchain_and_images(device.clone(), surface.clone())?;

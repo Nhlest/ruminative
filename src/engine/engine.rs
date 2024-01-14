@@ -1,15 +1,10 @@
 use crate::engine::imgui_pipeline::ImguiPipeline;
 use crate::engine::internals::RuminativeInternals;
 use crate::engine::rumigui_pipeline::RumiguiPipeline;
-use crate::engine::tilemap_pipeline::TilemapPipeline;
 use crate::engine::{ANamedSingleton, ASingleton, GameViewport, KeyPressed, PipelineRunner, Singleton, WinitEvent};
-use bevy_app::{App, AppExit, Plugin};
-use std::error::Error;
-use std::mem::{ManuallyDrop, MaybeUninit};
+use bevy_app::{App, Plugin};
 use std::sync::Arc;
-use bevy_ecs::system::RunSystemOnce;
-use imgui::{Context, Ui};
-use imgui_sys::igGetCurrentContext;
+use imgui::{Context};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
   AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer
@@ -24,8 +19,6 @@ use vulkano::{sync, Validated, VulkanError};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::Window;
-use crate::engine::barrier_pipeline::BarrierPipeline;
-use crate::systems::SystemStorage;
 
 fn window_size_dependent_setup(images: &[Arc<Image>], viewport: &mut Viewport) -> Vec<Arc<ImageView>> {
   let dimensions = images[0].extent();
@@ -50,11 +43,7 @@ impl Plugin for RuminativeEnginePlugin {
     app.add_event::<KeyPressed>();
 
     app.init_resource::<GameViewport>();
-    app.init_resource::<SystemStorage>();
-
-    app.add_plugins(TilemapPipeline);
     app.add_plugins(RumiguiPipeline);
-    app.add_plugins(BarrierPipeline);
     app.add_plugins(ImguiPipeline);
 
     app.insert_non_send_resource(Singleton(event_loop));
@@ -155,20 +144,15 @@ impl Plugin for RuminativeEnginePlugin {
             app.insert_non_send_resource(builder);
 
             let mut imgui = app.world.non_send_resource_mut::<Context>();
-            let ctx = unsafe { igGetCurrentContext() };
             let ui = imgui.new_frame();
 
             {
               ui.dockspace_over_main_viewport();
             }
 
-            // app.world.insert_non_send_resource(ui);
-            // app.world.insert_non_send_resource(ctx);
-
             app.update();
             for i in app.world.resource::<PipelineRunner>().order.clone() {
               app.world.run_system(i).unwrap();
-              // app.world.run_system(i).unwrap();
             }
 
             let mut builder = app

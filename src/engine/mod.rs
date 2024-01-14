@@ -1,6 +1,6 @@
 use bevy_derive::*;
 use bevy_ecs::prelude::*;
-use bevy_ecs::system::{RegisteredSystemError, RunSystemOnce, SystemId};
+use bevy_ecs::system::{SystemId};
 use smallvec::SmallVec;
 use std::error::Error;
 use std::marker::PhantomData;
@@ -10,7 +10,6 @@ use winit::event::{Event, VirtualKeyCode};
 pub mod imgui_pipeline;
 pub mod rumigui_pipeline;
 pub mod tilemap;
-pub mod tilemap_pipeline;
 pub mod barrier_pipeline;
 
 pub mod engine;

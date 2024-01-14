@@ -8,23 +8,27 @@ edition = "2021"
 [dependencies]
 vulkano-shaders = "0.34.*"
 tracy-client = "0.16.*"
+serde_derive = "1.0.*"
 vulkano-win = "0.34.*"
 bevy_derive = "0.12.*"
-texpresso = "2.0.*"
+hashbrown = "0.14.*"
+itertools = "0.12.*"
 bevy_app = "0.12.*"
 bevy_ecs = "0.12.*"
-smallvec = "1.11.*"
+smallvec = "1.12.*"
 vulkano = "0.34.*"
+bimap = "0.6.*"
+serde = "1.0.*"
+winit = "0.28.*"
+png = "0.17.*"
+rfd = "0.13.*"
+ron = "0.8.*"
 #imgui = { version = "0.11.*", features = ["docking"] }
 #imgui-sys = { version = "0.11.0", features = ["docking"] }
 #imgui = { features = ["docking"], path = "../../imgui-rs/imgui" }
 #imgui-sys = { features = ["docking"], path = "../../imgui-rs/imgui-sys" }
-imgui = { features = ["docking"], git = "https://github.com/Nhlest/imgui-rs", branch = "main" }
 imgui-sys = { features = ["docking"], git = "https://github.com/Nhlest/imgui-rs", branch = "main" }
-winit = "0.28.*"
-itertools = "0.12.*"
-png = "0.17.*"
-rfd = "0.12.*"
+imgui = { features = ["docking"], git = "https://github.com/Nhlest/imgui-rs", branch = "main" }
 
 [profile.release]
 strip = true

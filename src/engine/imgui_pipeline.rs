@@ -1,18 +1,16 @@
 use crate::engine::{handle_result, ASingleton, AssociatedResource, PipelineRunner, Resultat, WinitEvent, Singleton, ANamedSingleton};
 use bevy_app::{App, Plugin, PostUpdate, PreUpdate};
 use bevy_ecs::prelude::*;
-use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key, Ui};
+use imgui::{BackendFlags, ConfigFlags, Context, DrawCmd, DrawVert, FontAtlasTexture, FontSource, Io, Key};
 use smallvec::smallvec;
 use std::cmp::Ordering;
 use std::error::Error;
-use std::mem::ManuallyDrop;
 use std::slice;
 use std::sync::Arc;
-use imgui_sys::{igGetCurrentContext};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferToImageInfo, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, RenderingAttachmentInfo, RenderingInfo};
-use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo};
+use vulkano::descriptor_set::allocator::{StandardDescriptorSetAllocator};
 use vulkano::descriptor_set::{PersistentDescriptorSet, WriteDescriptorSet};
 use vulkano::device::{Device, Queue};
 use vulkano::format::Format;
@@ -42,7 +40,6 @@ use winit::event::{
   WindowEvent,
 };
 use winit::window::Window;
-use crate::assets::Asset;
 
 fn to_imgui_mouse_button(button: MouseButton) -> Option<imgui::MouseButton> {
   match button {
@@ -551,9 +548,7 @@ impl ImguiPipeline {
     vertex_buffers: Res<AssociatedResource<Self, Vec<Subbuffer<[DrawVertPod]>>>>,
     draw_commands: Res<AssociatedResource<Self, Vec<(usize, usize, u32, u32, i32, [f32; 4])>>>,
     viewport: Res<Singleton<Viewport>>,
-    texture_set: Res<ANamedSingleton<"X", PersistentDescriptorSet>>,
     framebuffer: Res<ANamedSingleton<"Output", ImageView>>,
-    sets: Query<&Asset<Image>>
   ) -> Resultat<()> {
     let window = surface.object().unwrap().downcast_ref::<Window>().unwrap();
     builder
@@ -569,33 +564,14 @@ impl ImguiPipeline {
       .unwrap()
       .set_viewport(0, smallvec![viewport.0.clone()])
       .unwrap();
-    for (texture, buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
-      if *texture > 1 {
-        let descriptor_set = sets.get(Entity::from_bits(*texture as u64)).unwrap().data.clone();
-        builder.bind_pipeline_graphics(pipeline.clone())?
-          .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            pipeline.layout().clone(),
-            0,
-            descriptor_set,
-          )?;
-      } else if *texture == 1 {
-        builder.bind_pipeline_graphics(pipeline.clone())?
-          .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            pipeline.layout().clone(),
-            0,
-            texture_set.clon(),
-          )?;
-      } else {
-        builder.bind_pipeline_graphics(pipeline.clone())?
-          .bind_descriptor_sets(
-            PipelineBindPoint::Graphics,
-            pipeline.layout().clone(),
-            0,
-            descriptor_set.clone(),
-          )?;
-      }
+    for (_texture, buf, index_count, first_index, vertex_offset, clip_rect) in draw_commands.iter() {
+      builder.bind_pipeline_graphics(pipeline.clone())?
+        .bind_descriptor_sets(
+          PipelineBindPoint::Graphics,
+          pipeline.layout().clone(),
+          0,
+          descriptor_set.clone(),
+        )?;
       builder
         .bind_vertex_buffers(0, vertex_buffers[*buf].clone())?
         .bind_index_buffer(index_buffers[*buf].clone())?
